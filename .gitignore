@@ -1,28 +1,14 @@
-# Dependencies
 node_modules/
-
-# Build output
 dist/
-build/
-client/dist/
-server/dist/
+.data/
+*.log
+.env
+.env.local
 
-# PGLite database files (rebuildable from corpus)
-data/pglite/
-data/pglite-e2e/
-!data/pglite/.gitkeep
-
-# Test / coverage artifacts
+# Test / build output
 coverage/
 playwright-report/
 test-results/
-.vitest/
+.vite/
 
-# Env / secrets
-.env
-.env.*
-!.env.example
-
-# Editor / OS
 .DS_Store
-*.log
