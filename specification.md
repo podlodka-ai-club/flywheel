@@ -81,6 +81,7 @@ PRAGMA busy_timeout = 5000;
 CREATE TABLE IF NOT EXISTS messages (
     id TEXT PRIMARY KEY,
     thread_id TEXT NOT NULL,             -- External ticket ID or conversation identifier
+    customer_id TEXT,                    -- Stable customer/account ID from the external platform (B2B tenant of the thread)
     role TEXT NOT NULL,                  -- 'customer' | 'assistant' | 'system'
     content TEXT NOT NULL,               -- The message body
     status TEXT NOT NULL,                -- 'pending' | 'processing' | 'completed' | 'failed'
@@ -127,6 +128,10 @@ WHERE role = 'assistant';
 CREATE INDEX IF NOT EXISTS idx_messages_failed
 ON messages(created_at)
 WHERE status = 'failed' AND sent_to_customer_at IS NULL;
+
+-- Per-customer queries: audit today, memory scoping in future phases (Section 10)
+CREATE INDEX IF NOT EXISTS idx_messages_customer
+ON messages(customer_id, created_at ASC);
 ```
 
 ### 3.2. Table Contract (External Integration Obligations)
@@ -134,7 +139,7 @@ WHERE status = 'failed' AND sent_to_customer_at IS NULL;
 The `messages` table is the sole integration surface. External components — built outside this codebase and co-located with the database file — must follow this contract:
 
 **Ingest (external writer):**
-1. Insert each customer message as `(id, thread_id, role='customer', content, status='pending', metadata, created_at)`, where `id` is the **external platform's own message ID** and `metadata` carries at minimum the verified customer identity and channel.
+1. Insert each customer message as `(id, thread_id, customer_id, role='customer', content, status='pending', metadata, created_at)`, where `id` is the **external platform's own message ID**, `customer_id` is the platform's **stable, verified customer/account identifier** (the B2B tenant — required for tool scoping and future per-customer memory), and `metadata` carries channel and custom tags.
 2. Insert with `INSERT OR IGNORE` — at-least-once webhook redelivery then dedupes on the primary key.
 3. After receiving an escalated reply for a thread, **stop inserting** further customer messages for that thread until a human hands it back. The engine is deliberately thread-stateless and will answer anything enqueued; muting an escalated thread is the platform's responsibility.
 
@@ -328,13 +333,15 @@ export interface ToolContext {
 3. **`lookup_customer_account`**: Retrieves customer account status, billing tier, and recent activity from the external CRM.
 4. **`escalate_to_human`**: Flags the reply as an escalation. The final assistant row carries customer-safe text in `content` (e.g. "I'm connecting you with a specialist") and `metadata.escalated = true` plus `metadata.escalation_reason`; internal routing details never go into `content`. Acting on the flag — assigning a human and muting the thread — is the external platform's contractual job (Section 3.2).
 
-**Authorization rule:** `lookup_order` and `lookup_customer_account` must scope every lookup to the verified customer identity in `ToolContext.metadata` (populated by the external system at ingest). IDs appearing in customer-authored text are untrusted input — honoring them unscoped would let a prompt-injected message read another customer's data.
+**Authorization rule:** `lookup_order` and `lookup_customer_account` must scope every lookup to the verified `customer_id` propagated from the message row into the agent run (and into `ToolContext`). IDs appearing in customer-authored text are untrusted input — honoring them unscoped would let a prompt-injected message read another customer's data.
 
 ---
 
 ## 7. Structured Logging & Observability
 
 All operational traces, tool calls, and LLM telemetry are formatted as single-line JSON strings to `stdout`.
+
+The same lines also persist to **size-rotated log files** via `@std/log`'s `RotatingFileHandler`: each process writes its own file under `LOG_DIR` (default `./data/logs/`) — `engine.log` for the agent engine, `dev-ui.log` for the dev harness — rotated at `LOG_MAX_BYTES` (default 5 MB) with `LOG_BACKUP_COUNT` numbered backups (default 3). Per-process files keep rotation single-writer. Every event carries its `threadId` as a structured field, so **per-thread log views are a filter, not separate files** — the dev harness's Logs view reads the files and filters by source, minimum level, thread, and text.
 
 ### 7.1. Log Event Schemas
 
@@ -425,9 +432,11 @@ deno run \
   --allow-net=api.anthropic.com,api.openai.com \
   --allow-read=./data,./schema.sql \
   --allow-write=./data \
-  --allow-env=DATABASE_PATH,ANTHROPIC_API_KEY,OPENAI_API_KEY,LOG_LEVEL,LOCK_TIMEOUT_MS,MAX_RETRIES \
+  --allow-env=DATABASE_PATH,ANTHROPIC_API_KEY,OPENAI_API_KEY,LOG_LEVEL,LOCK_TIMEOUT_MS,MAX_RETRIES,WORKER_CONCURRENCY,POLL_INTERVAL_MS,AGENT_MODE,REAPER_INTERVAL_MS,LOG_DIR,LOG_MAX_BYTES,LOG_BACKUP_COUNT \
   src/main.ts
 ```
+
+(The canonical task lives in `deno.json`; LLM provider hosts/keys join the allowlists in the milestone that wires the real agent. Log files stay under `./data`, so no write scope beyond `./data` is ever needed.)
 
 ### 9.2. SQLite Operational Settings
 
@@ -437,7 +446,18 @@ deno run \
 
 ---
 
-## 10. Summary of Architectural Advantages
+## 10. Future Direction: Per-Customer Memory (B2B)
+
+Flywheel serves **B2B support**: a "customer" is a business account, and effective support requires accumulating knowledge about each customer's setup, history, and recurring issues. Memory itself is a later phase, but the architecture reserves for it now:
+
+1. **First-class customer identity.** Every customer message carries the external platform's stable account ID in `customer_id` (Section 3.2), and the engine propagates it end-to-end: ingest → message row → assistant reply row → agent run input → tools → any future memory store. `idx_messages_customer` already supports per-customer queries.
+2. **Hard isolation between customers.** All future memory is keyed by `customer_id` and scoped to it on every read and write. The agent's context for a thread may only ever contain that thread's history plus memory belonging to that thread's `customer_id` — nothing cross-customer, ever. This is the same rule the Section 6.1 authorization already applies to tool lookups.
+3. **Identity is issued externally.** `customer_id` originates in the external ticketing platform, which is responsible for verifying it. The engine never invents, infers, or accepts one from message text. Messages without a `customer_id` get no memory reads or writes.
+4. **Likely shape (non-binding):** a `memories` table keyed by `(customer_id, key)`, maintained by the agent through a dedicated tool and hydrated into the system prompt per run — to be specified in its own milestone.
+
+---
+
+## 11. Summary of Architectural Advantages
 
 - **Ultra-Minimalist Persistence**: A single `messages` table serves as the queue, history store, and outbound buffer.
 - **Zero External Broker Dependencies**: Operates entirely on standard SQLite with ACID guarantees.

@@ -7,6 +7,11 @@ export interface Config {
   workerConcurrency: number;
   pollIntervalMs: number;
   agentMode: "echo" | "llm";
+  reaperIntervalMs: number;
+  devFaults: boolean;
+  logDir: string;
+  logMaxBytes: number;
+  logBackupCount: number;
 }
 
 function envStr(name: string, fallback: string): string {
@@ -32,6 +37,14 @@ function envLogLevel(name: string, fallback: Config["logLevel"]): Config["logLev
   return raw;
 }
 
+function envBool(name: string, fallback: boolean): boolean {
+  const raw = Deno.env.get(name);
+  if (raw === undefined || raw === "") return fallback;
+  if (raw === "1" || raw === "true") return true;
+  if (raw === "0" || raw === "false") return false;
+  throw new Error(`Invalid ${name}: expected 1|0|true|false, got "${raw}"`);
+}
+
 function envAgentMode(name: string, fallback: Config["agentMode"]): Config["agentMode"] {
   const raw = envStr(name, fallback);
   if (raw !== "echo" && raw !== "llm") {
@@ -51,6 +64,13 @@ export function loadConfig(): Config {
     pollIntervalMs: envInt("POLL_INTERVAL_MS", 500),
     // Echo until Milestone 4 delivers the real pi.dev harness.
     agentMode: envAgentMode("AGENT_MODE", "echo"),
+    reaperIntervalMs: envInt("REAPER_INTERVAL_MS", 5000),
+    // Opt-in [[sleep:ms]] / [[fail]] markers, honored by the echo agent only.
+    devFaults: envBool("DEV_FAULTS", false),
+    // Under ./data so the existing write permission covers it; gitignored.
+    logDir: envStr("LOG_DIR", "./data/logs"),
+    logMaxBytes: envInt("LOG_MAX_BYTES", 5_242_880),
+    logBackupCount: envInt("LOG_BACKUP_COUNT", 3),
   };
 }
 

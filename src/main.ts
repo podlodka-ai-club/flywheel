@@ -1,25 +1,36 @@
 import { config } from "./config.ts";
-import { logger } from "./logger/index.ts";
+import { configureLogging, logger, teardownLogging } from "./logger/index.ts";
 import { openDb } from "./db/client.ts";
 import { createHarness } from "./agent/harness.ts";
+import { startReaper } from "./engine/reaper.ts";
 import { startWorkers } from "./engine/worker.ts";
 
 if (import.meta.main) {
+  const logFile = configureLogging({ name: "engine" });
   const db = openDb(config.databasePath);
-  const harness = createHarness(config.agentMode);
+  const harness = createHarness(config.agentMode, { devFaults: config.devFaults });
   const pool = startWorkers(db, harness, {
     workerConcurrency: config.workerConcurrency,
     pollIntervalMs: config.pollIntervalMs,
     maxRetries: config.maxRetries,
   });
+  const reaper = startReaper(db, {
+    lockTimeoutMs: config.lockTimeoutMs,
+    maxRetries: config.maxRetries,
+    intervalMs: config.reaperIntervalMs,
+  });
 
   logger.info("engine_started", {
+    pid: Deno.pid,
+    logFile,
     databasePath: config.databasePath,
     agentMode: harness.mode,
     workerConcurrency: config.workerConcurrency,
     pollIntervalMs: config.pollIntervalMs,
     maxRetries: config.maxRetries,
     lockTimeoutMs: config.lockTimeoutMs,
+    reaperIntervalMs: config.reaperIntervalMs,
+    devFaults: config.devFaults,
   });
 
   let shuttingDown = false;
@@ -27,9 +38,10 @@ if (import.meta.main) {
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info("engine_stopping", { signal });
-    await pool.stop();
+    await Promise.all([pool.stop(), reaper.stop()]);
     db.close();
     logger.info("engine_stopped", {});
+    teardownLogging();
     Deno.exit(0);
   };
   Deno.addSignalListener("SIGINT", () => void shutdown("SIGINT"));

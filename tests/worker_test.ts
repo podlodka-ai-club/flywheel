@@ -45,30 +45,74 @@ Deno.test("echo pipeline: claim → process → fenced completion, end to end", 
       await pool.stop();
     }
 
-    for (const [anchorId, threadId, content] of [
-      ["m1", "t1", "hello"],
-      ["m2", "t1", "again"],
-      ["m3", "t2", "other"],
-    ] as const) {
-      const replyRow = getThreadMessages(db, threadId).find(
-        (m) => m.role === "assistant" && m.inReplyTo === anchorId,
+    // t2: a plain single-message reply.
+    const t2Replies = getThreadMessages(db, "t2").filter((m) => m.role === "assistant");
+    assertEquals(t2Replies.length, 1);
+    assertEquals(t2Replies[0].inReplyTo, "m3");
+    assertEquals(t2Replies[0].content, "ECHO: other");
+    assertEquals(t2Replies[0].model, "echo");
+    assertEquals(t2Replies[0].sentToCustomerAt, null);
+
+    // t1: m2 was pending behind the anchor, so the pre-commit freshness check
+    // (spec §4.3) coalesces it — ONE consolidated reply anchored on m1. If
+    // m1 completed before m2 was even inserted... impossible here: both were
+    // inserted before the pool started. Either way, no per-message pair split
+    // may produce two replies out of order — coalescing is the contract.
+    const t1Replies = getThreadMessages(db, "t1").filter((m) => m.role === "assistant");
+    assertEquals(t1Replies.length, 1, "expected one consolidated reply for t1");
+    assertEquals(t1Replies[0].inReplyTo, "m1");
+    assertEquals(t1Replies[0].content, "ECHO: hello | again");
+  });
+});
+
+Deno.test("follow-ups arriving mid-run coalesce into one consolidated reply", async () => {
+  await withTempDb(async (db) => {
+    insertCustomerMessage(db, { id: "m1", threadId: "t1", content: "one", createdAt: 1000 });
+
+    // First run blocks until the test releases it — giving us a deterministic
+    // window to insert follow-ups "while the reply is being generated".
+    let releaseFirstRun = () => {};
+    const firstRunGate = new Promise<void>((resolve) => {
+      releaseFirstRun = resolve;
+    });
+    let runCalls = 0;
+    const gatedEcho: AgentHarness = {
+      mode: "gated-echo",
+      run: async (input) => {
+        runCalls++;
+        if (runCalls === 1) await firstRunGate;
+        const texts = [input.message.content, ...(input.followUps ?? []).map((m) => m.content)];
+        return {
+          content: `ECHO: ${texts.join(" | ")}`,
+          model: "echo",
+          tokensIn: null,
+          tokensOut: null,
+          costUsd: null,
+        };
+      },
+    };
+
+    const pool = startWorkers(db, gatedEcho, {
+      workerConcurrency: 1,
+      pollIntervalMs: 10,
+      maxRetries: 3,
+    });
+    try {
+      await waitFor(() => getMessage(db, "m1")?.status === "processing");
+      insertCustomerMessage(db, { id: "m2", threadId: "t1", content: "two", createdAt: 2000 });
+      insertCustomerMessage(db, { id: "m3", threadId: "t1", content: "three", createdAt: 3000 });
+      releaseFirstRun();
+      await waitFor(() =>
+        ["m1", "m2", "m3"].every((id) => getMessage(db, id)?.status === "completed")
       );
-      assert(replyRow !== undefined, `missing reply for ${anchorId}`);
-      assertEquals(replyRow.content, `ECHO: ${content}`);
-      assertEquals(replyRow.status, "completed");
-      assertEquals(replyRow.model, "echo");
-      assertEquals(replyRow.sentToCustomerAt, null);
+    } finally {
+      await pool.stop();
     }
 
-    // Per-thread FIFO: m1's reply committed no later than m2's.
-    const t1 = getThreadMessages(db, "t1");
-    const r1 = t1.find((m) => m.inReplyTo === "m1");
-    const r2 = t1.find((m) => m.inReplyTo === "m2");
-    assert(r1 !== undefined && r2 !== undefined);
-    assert(
-      (r1.completedAt ?? 0) <= (r2.completedAt ?? Infinity),
-      "thread t1 replies out of order",
-    );
+    const replies = getThreadMessages(db, "t1").filter((m) => m.role === "assistant");
+    assertEquals(replies.length, 1, "expected ONE consolidated reply");
+    assertEquals(replies[0].content, "ECHO: one | two | three");
+    assertEquals(replies[0].inReplyTo, "m1");
   });
 });
 

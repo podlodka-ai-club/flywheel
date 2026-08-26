@@ -65,22 +65,46 @@ Your testing loop: `deno task start` (engine) in one terminal, `deno task dev:ui
 **Build:**
 - `src/engine/reaper.ts`: stale-lease recovery, `MAX_RETRIES` → `failed` marking (spec §4.2)
 - Pre-commit freshness check & reply coalescing (spec §4.3)
-- Fault injection **in the echo agent only**, enabled by `DEV_FAULTS=1`: `[[sleep:8000]]` delays the run, `[[fail]]` throws
+- Fault injection **in the echo agent only**, enabled by `DEV_FAULTS=1`: `[[sleep:ms]]` delays every attempt, `[[sleep_once:ms]]` delays only the first attempt (so recovery demos end in a reply instead of retry starvation), `[[fail]]` throws
 - Harness: a **Failed messages** panel (polls `idx_messages_failed` like a real platform would) with a "Route to human" button that stamps the acknowledgment; attempt counters visible on messages
+- `customer_id` as a first-class column (added on request, for B2B memory later): propagated ingest → customer row → reply row → agent input; `idx_messages_customer`; additive migration for existing DBs
 
-**You verify (all from the browser, engine in its own terminal):**
-1. Send `[[sleep:8000]] hello`, `kill -9` the engine mid-run, restart it → the reaper reclaims and exactly one reply arrives.
-2. Set a short `LOCK_TIMEOUT_MS` so a slow run gets reaped while its worker is still alive → the losing worker logs `reply_discarded_lost_lease`; exactly one reply shows in the UI.
-3. While a `[[sleep]]` run is in flight, send two follow-ups → one consolidated echo reply covering all three messages.
-4. Send `[[fail]] test` → attempt counter climbs to 3 → message lands in the Failed panel → "Route to human" acknowledges it.
+**You verify (all from the browser; engine in its own terminal, started as:**
+`DEV_FAULTS=1 LOCK_TIMEOUT_MS=6000 REAPER_INTERVAL_MS=1000 deno task start`**):**
+1. **Crash recovery:** send `[[sleep_once:20000]] hello`, `kill -9` the engine while it sleeps (`engine_started` logs its pid), restart it → within ~7s the reaper reclaims the orphaned lease and the instant retry produces exactly one reply.
+2. **Reaped while alive:** send `[[sleep_once:10000]] race` — at ~6s the reaper reclaims the lease while worker A still sleeps; worker B's instant retry replies (exactly one reply in the UI); at ~10s worker A wakes and logs `reply_discarded_lost_lease`.
+3. **Coalescing:** send `[[sleep:4000]] first`, then two follow-ups during the sleep → ONE consolidated reply `ECHO: [[sleep:4000]] first | second | third` (each regeneration re-applies the sleep, so allow ~8–12s).
+4. **Failure surfacing:** send `[[fail]] test` → three fast attempts → message lands in the ⚠ Failed panel with its error → "Route to human" acknowledges it (stamps `sent_to_customer_at`).
 
-**Automated tests:** reaper reclaim, retry exhaustion → failed, duplicate-reply race (fence + `UNIQUE(in_reply_to)` backstop), coalescing.
+**Automated tests:** reaper reclaim, retry exhaustion → failed, duplicate-reply race (fence + `UNIQUE(in_reply_to)` backstop), coalescing, fault markers, customer-id propagation.
+
+---
+
+## M3.5 — Structured logging & Logs view (added on request)
+
+**Goal:** detailed logging on Deno's standard `@std/log` — console + rotating files — and a Logs view in the harness for debugging.
+
+**Build:**
+- [src/logger/index.ts](src/logger/index.ts) rebuilt on `@std/log`: console handler + `RotatingFileHandler`, identical single-line JSON (spec §7 format) in both sinks, flushed per event
+- Per-process files under `LOG_DIR` (default `./data/logs/`): `engine.log`, `dev-ui.log` — rotation (`LOG_MAX_BYTES` 5 MB × `LOG_BACKUP_COUNT` 3) never races across processes
+- **Per-thread logs as a view, not files**: every event carries `threadId`, so the harness filters one source of truth (per-thread files would sprawl unboundedly; a per-thread export can be added later if a ticket's trace ever needs attaching)
+- Harness **Logs view**: source (engine/dev-ui), min level, threadId, text search, follow mode; plus a "🪵 logs for this thread" jump from any conversation
+- `GET /api/logs` endpoint (tails the file server-side, filters, caps at the last 512 KB)
+
+**You verify:**
+1. Run engine + harness, chat a bit → `data/logs/engine.log` and `dev-ui.log` exist and grow; console output unchanged.
+2. Logs view shows engine events live (claim/complete with worker ids and durations); switching source shows the harness's own ingest/delivery events.
+3. Open a thread → "🪵 logs for this thread" → Logs view pre-filtered to exactly that conversation's trace.
+4. Filters work: level `warn +` shows only reaper/fence warnings; text search matches.
+5. (Optional) rotation: `LOG_MAX_BYTES=2000 deno task start`, chat until `engine.log.1` appears.
+
+**Automated tests:** JSON line shape in the file sink, size rotation producing numbered backups, teardown detaching the file cleanly.
 
 ---
 
 ## M4 — Real AI agent (pi.dev)
 
-**Goal:** swap echo for the real LLM agent: pi-ai gateway, pi-agent-core loop, thread hydration, telemetry. Requires `ANTHROPIC_API_KEY`.
+**Goal:** swap echo for the real LLM agent: pi-ai gateway, pi-agent-core loop, thread hydration, telemetry. Requires LLM API key (e.g. OpenRouter).
 
 **Build:**
 - `src/agent/harness.ts`: real implementation via `@earendil-works/pi-agent-core` + `@earendil-works/pi-ai` (`AGENT_MODE=llm`, the default)
@@ -136,3 +160,9 @@ Your testing loop: `deno task start` (engine) in one terminal, `deno task dev:ui
 1. Ctrl-C mid-conversation → no rows stuck in `processing`; restart resumes cleanly.
 2. The engine fails fast with clear errors when env/permissions are missing.
 3. `deno task test` is green across the entire suite.
+
+---
+
+## Beyond M6 (noted, not yet scheduled)
+
+- **Per-customer memory (B2B)** — the agent accumulates knowledge per customer account (setup, history, recurring issues) with **hard isolation between customers**; see spec §10 for the reserved architecture. The `customer_id` plumbing landed in M3; the memory store, its maintenance tool, and prompt hydration get their own milestone when we reach it.

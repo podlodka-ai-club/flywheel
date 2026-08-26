@@ -14,8 +14,26 @@ export function openDb(path: string): DatabaseSync {
     Deno.mkdirSync(dirname(path), { recursive: true });
   }
   const db = new DatabaseSync(path);
+  migrate(db);
   db.exec(Deno.readTextFileSync(SCHEMA_URL));
   return db;
+}
+
+/**
+ * Additive migrations for databases created by earlier schema versions —
+ * must run before schema.sql, whose indexes may reference the new columns.
+ */
+function migrate(db: DatabaseSync): void {
+  const hasTable = db.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'messages'",
+  ).get();
+  if (hasTable === undefined) return;
+  const columns = db.prepare("PRAGMA table_info(messages)")
+    // deno-lint-ignore no-explicit-any
+    .all().map((c: any) => c.name as string);
+  if (!columns.includes("customer_id")) {
+    db.exec("ALTER TABLE messages ADD COLUMN customer_id TEXT");
+  }
 }
 
 if (import.meta.main) {

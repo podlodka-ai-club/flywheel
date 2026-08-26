@@ -5,6 +5,7 @@ PRAGMA busy_timeout = 5000;
 CREATE TABLE IF NOT EXISTS messages (
     id TEXT PRIMARY KEY,
     thread_id TEXT NOT NULL,             -- External ticket ID or conversation identifier
+    customer_id TEXT,                    -- Stable customer/account ID from the external platform (B2B tenant of the thread)
     role TEXT NOT NULL,                  -- 'customer' | 'assistant' | 'system'
     content TEXT NOT NULL,               -- The message body
     status TEXT NOT NULL,                -- 'pending' | 'processing' | 'completed' | 'failed'
@@ -51,3 +52,7 @@ WHERE role = 'assistant';
 CREATE INDEX IF NOT EXISTS idx_messages_failed
 ON messages(created_at)
 WHERE status = 'failed' AND sent_to_customer_at IS NULL;
+
+-- Per-customer queries: audit today, memory scoping in future phases
+CREATE INDEX IF NOT EXISTS idx_messages_customer
+ON messages(customer_id, created_at ASC);

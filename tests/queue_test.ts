@@ -4,6 +4,7 @@ import { openDb } from "../src/db/client.ts";
 import { getMessage, getThreadMessages, insertCustomerMessage } from "../src/db/messages.ts";
 import {
   claimNextMessage,
+  claimThreadFollowUps,
   completeWithReply,
   markFailed,
   releaseClaim,
@@ -102,9 +103,16 @@ Deno.test("interleaved claims never hand out the same message twice", async () =
 
 Deno.test("completeWithReply commits customer row + assistant reply atomically", async () => {
   await withTempDb((db) => {
-    insertCustomerMessage(db, { id: "m1", threadId: "t1", content: "hello", createdAt: 1000 });
+    insertCustomerMessage(db, {
+      id: "m1",
+      threadId: "t1",
+      content: "hello",
+      customerId: "cust_9",
+      createdAt: 1000,
+    });
     const claimed = claimNextMessage(db, "w1", 2000);
     assert(claimed !== null);
+    assertEquals(claimed.customerId, "cust_9");
 
     const outcome = completeWithReply(db, {
       anchorId: "m1",
@@ -126,6 +134,8 @@ Deno.test("completeWithReply commits customer row + assistant reply atomically",
     assertEquals(replyRow?.content, "ECHO: hello");
     assertEquals(replyRow?.tokensIn, 12);
     assertEquals(replyRow?.sentToCustomerAt, null);
+    // Customer identity propagates from the anchor to the reply row.
+    assertEquals(replyRow?.customerId, "cust_9");
   });
 });
 
@@ -182,6 +192,75 @@ Deno.test("UNIQUE(in_reply_to) backstop rejects a second reply to the same ancho
     );
     assertEquals(getMessage(db, "r_dup"), null);
     // The rollback restored nothing else: still exactly one reply.
+    assertEquals(
+      getThreadMessages(db, "t1").filter((m) => m.role === "assistant").length,
+      1,
+    );
+  });
+});
+
+Deno.test("claimThreadFollowUps claims every pending message in the thread, oldest first", async () => {
+  await withTempDb((db) => {
+    insertCustomerMessage(db, { id: "anchor", threadId: "t1", content: "a", createdAt: 1000 });
+    const anchor = claimNextMessage(db, "w1", 2000);
+    assertEquals(anchor?.id, "anchor");
+
+    insertCustomerMessage(db, { id: "f2", threadId: "t1", content: "later", createdAt: 4000 });
+    insertCustomerMessage(db, { id: "f1", threadId: "t1", content: "sooner", createdAt: 3000 });
+    insertCustomerMessage(db, { id: "other", threadId: "t2", content: "unrelated", createdAt: 3500 });
+
+    const followUps = claimThreadFollowUps(db, "t1", "w1", 5000);
+    assertEquals(followUps.map((m) => m.id), ["f1", "f2"]);
+    for (const m of followUps) {
+      assertEquals(m.status, "processing");
+      assertEquals(m.workerId, "w1");
+      assertEquals(m.attemptCount, 1);
+    }
+    assertEquals(getMessage(db, "other")?.status, "pending");
+    assertEquals(claimThreadFollowUps(db, "t1", "w1", 5001).length, 0);
+  });
+});
+
+Deno.test("completeWithReply with extras completes all-or-nothing", async () => {
+  await withTempDb((db) => {
+    insertCustomerMessage(db, { id: "anchor", threadId: "t1", content: "a", createdAt: 1000 });
+    claimNextMessage(db, "w1", 2000);
+    insertCustomerMessage(db, { id: "f1", threadId: "t1", content: "b", createdAt: 3000 });
+    claimThreadFollowUps(db, "t1", "w1", 4000);
+
+    // Steal the follow-up (simulates a reap + reclaim of just that row):
+    // the transaction must reject and change nothing.
+    db.prepare("UPDATE messages SET worker_id = 'w2' WHERE id = 'f1'").run();
+    assertEquals(
+      completeWithReply(db, {
+        anchorId: "anchor",
+        threadId: "t1",
+        workerId: "w1",
+        extraIds: ["f1"],
+        reply: reply("r1"),
+      }),
+      "lost_lease",
+    );
+    assertEquals(getMessage(db, "anchor")?.status, "processing");
+    assertEquals(getMessage(db, "r1"), null);
+
+    // Restore ownership: now the whole batch commits with ONE reply.
+    db.prepare("UPDATE messages SET worker_id = 'w1' WHERE id = 'f1'").run();
+    assertEquals(
+      completeWithReply(db, {
+        anchorId: "anchor",
+        threadId: "t1",
+        workerId: "w1",
+        extraIds: ["f1"],
+        reply: reply("r1", "ECHO: a | b"),
+        now: 9000,
+      }),
+      "committed",
+    );
+    assertEquals(getMessage(db, "anchor")?.status, "completed");
+    assertEquals(getMessage(db, "f1")?.status, "completed");
+    const replyRow = getMessage(db, "r1");
+    assertEquals(replyRow?.inReplyTo, "anchor");
     assertEquals(
       getThreadMessages(db, "t1").filter((m) => m.role === "assistant").length,
       1,

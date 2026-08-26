@@ -6,6 +6,7 @@ export type Status = "pending" | "processing" | "completed" | "failed";
 export interface MessageRecord {
   id: string;
   threadId: string;
+  customerId: string | null;
   role: Role;
   content: string;
   status: Status;
@@ -48,6 +49,7 @@ export function rowToRecord(row: any): MessageRecord {
   return {
     id: row.id,
     threadId: row.thread_id,
+    customerId: row.customer_id ?? null,
     role: row.role,
     content: row.content,
     status: row.status,
@@ -71,6 +73,8 @@ export interface InsertCustomerMessageInput {
   id: string;
   threadId: string;
   content: string;
+  /** Stable customer/account ID issued by the external platform (spec §3.2). */
+  customerId?: string;
   metadata?: Record<string, unknown>;
   createdAt?: number;
 }
@@ -85,11 +89,12 @@ export function insertCustomerMessage(
   input: InsertCustomerMessageInput,
 ): { inserted: boolean } {
   const result = db.prepare(
-    `INSERT OR IGNORE INTO messages (id, thread_id, role, content, status, metadata, created_at)
-     VALUES (?, ?, 'customer', ?, 'pending', ?, ?)`,
+    `INSERT OR IGNORE INTO messages (id, thread_id, customer_id, role, content, status, metadata, created_at)
+     VALUES (?, ?, ?, 'customer', ?, 'pending', ?, ?)`,
   ).run(
     input.id,
     input.threadId,
+    input.customerId ?? null,
     input.content,
     input.metadata === undefined ? null : JSON.stringify(input.metadata),
     input.createdAt ?? Date.now(),
@@ -129,6 +134,30 @@ export function markDelivered(db: DatabaseSync, id: string, now: number): boolea
   const result = db.prepare(
     `UPDATE messages SET sent_to_customer_at = ?
      WHERE id = ? AND role = 'assistant' AND status = 'completed' AND sent_to_customer_at IS NULL`,
+  ).run(now, id);
+  return Number(result.changes) > 0;
+}
+
+/**
+ * The external platform's failure poll (spec §3.2, idx_messages_failed):
+ * terminal failures nobody has routed to a human yet.
+ */
+export function listUnacknowledgedFailed(db: DatabaseSync): MessageRecord[] {
+  return db.prepare(
+    `SELECT * FROM messages
+     WHERE status = 'failed' AND sent_to_customer_at IS NULL
+     ORDER BY created_at ASC, id ASC`,
+  ).all().map(rowToRecord);
+}
+
+/**
+ * Acknowledge a failed message after routing the thread to a human. On
+ * failed customer rows sent_to_customer_at means "failure handled" (§3.2).
+ */
+export function acknowledgeFailed(db: DatabaseSync, id: string, now: number): boolean {
+  const result = db.prepare(
+    `UPDATE messages SET sent_to_customer_at = ?
+     WHERE id = ? AND status = 'failed' AND sent_to_customer_at IS NULL`,
   ).run(now, id);
   return Number(result.changes) > 0;
 }

@@ -58,6 +58,38 @@
   #threads .t-counts { display: flex; gap: 4px; margin-top: 5px; flex-wrap: wrap; }
   .empty { color: var(--muted); text-align: center; padding: 24px 12px; font-size: 13px; }
 
+  #failedPanel { border-top: 1px solid var(--border); flex: none; max-height: 45%; display: flex; flex-direction: column; }
+  #failedPanel[hidden] { display: none !important; }
+  .failed-head {
+    padding: 8px 12px; color: var(--failed); font-weight: 700; font-size: 12px;
+    text-transform: uppercase; letter-spacing: .04em; flex: none;
+  }
+  #failedList { list-style: none; overflow-y: auto; padding: 0 6px 6px; }
+  #failedList li {
+    padding: 8px 10px; border-radius: 8px; margin-bottom: 4px; cursor: pointer;
+    border: 1px solid color-mix(in srgb, var(--failed) 35%, transparent);
+    background: color-mix(in srgb, var(--failed) 7%, transparent);
+  }
+  #failedList .f-row { display: flex; align-items: center; gap: 6px; }
+  #failedList .f-thread { font-weight: 650; }
+  #failedList .f-time { margin-left: auto; color: var(--muted); font-size: 11px; }
+  #failedList .f-snippet {
+    color: var(--text); font-size: 12px; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; margin-top: 3px;
+  }
+  #failedList .f-error {
+    color: var(--failed); font-size: 11px; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; margin-top: 2px;
+  }
+  #failedList .f-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  #failedList .f-attempts { color: var(--muted); font-size: 11px; }
+  #failedList .route {
+    border: 1px solid color-mix(in srgb, var(--failed) 55%, transparent);
+    background: transparent; color: var(--failed); border-radius: 6px;
+    padding: 3px 10px; cursor: pointer; font-size: 11px; font-weight: 650;
+  }
+  #failedList .route:hover { background: color-mix(in srgb, var(--failed) 15%, transparent); }
+
   main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
   #threadHeader {
     padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel);
@@ -122,8 +154,41 @@
   }
   #viewToggle button.active { background: var(--panel-2); color: var(--text); }
 
-  #chatView, #dbView { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-  #chatView[hidden], #dbView[hidden] { display: none !important; }
+  #chatView, #dbView, #logsView { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  #chatView[hidden], #dbView[hidden], #logsView[hidden] { display: none !important; }
+
+  #logFilters {
+    display: flex; gap: 8px; align-items: center; padding: 8px 16px;
+    border-bottom: 1px solid var(--border); background: var(--panel); flex: none; flex-wrap: wrap;
+  }
+  #logFilters select, #logFilters input {
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 8px; font: inherit; font-size: 12px;
+  }
+  #logFilters select:focus, #logFilters input:focus { outline: none; border-color: var(--accent); }
+  #logSearch { width: 180px; }
+  #logThread { width: 150px; }
+  #logMeta { color: var(--muted); font-size: 12px; }
+  #logFilters .follow { color: var(--muted); font-size: 12px; display: flex; gap: 5px; align-items: center; margin-left: auto; }
+  #logList { flex: 1; overflow: auto; padding: 6px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+  .log-row {
+    display: flex; gap: 8px; align-items: baseline; padding: 3px 4px;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  }
+  .log-time { color: var(--muted); flex: none; }
+  .log-lvl { flex: none; width: 44px; font-weight: 700; text-transform: uppercase; font-size: 10px; }
+  .log-lvl.debug { color: var(--muted); }
+  .log-lvl.info { color: var(--processing); }
+  .log-lvl.warn { color: var(--pending); }
+  .log-lvl.error { color: var(--failed); }
+  .log-event { font-weight: 650; flex: none; }
+  .log-fields { color: var(--muted); overflow-wrap: anywhere; min-width: 0; }
+
+  .thread-logs-btn {
+    border: 1px solid var(--border); background: transparent; color: var(--muted);
+    border-radius: 6px; padding: 2px 10px; cursor: pointer; font-size: 11px; margin-left: auto;
+  }
+  .thread-logs-btn:hover { color: var(--text); border-color: var(--muted); }
 
   #dbBar { padding: 7px 16px; border-bottom: 1px solid var(--border); background: var(--panel); color: var(--muted); font-size: 11px; flex: none; }
   #dbFilters {
@@ -171,6 +236,7 @@
     <nav id="viewToggle">
       <button type="button" data-view="chat" class="active">Conversations</button>
       <button type="button" data-view="db">Database</button>
+      <button type="button" data-view="logs">Logs</button>
     </nav>
     <div id="conn"><span id="connDot"></span><span id="connText">connecting…</span></div>
   </header>
@@ -179,6 +245,10 @@
     <aside>
       <div class="pane-top"><button id="newThread">+ New thread</button></div>
       <ul id="threads"></ul>
+      <div id="failedPanel" hidden>
+        <div class="failed-head">⚠ Failed messages</div>
+        <ul id="failedList"></ul>
+      </div>
     </aside>
 
     <main>
@@ -186,6 +256,7 @@
       <div id="threadHeader">
         <strong id="threadTitle">No thread selected</strong>
         <span class="hint" id="threadHint">Create a thread and send a message as the customer.</span>
+        <button type="button" id="threadLogs" class="thread-logs-btn" hidden title="Open the Logs view filtered to this thread">🪵 logs for this thread</button>
       </div>
       <div id="messages"><div class="empty">Nothing here yet.</div></div>
       <form id="composer">
@@ -233,6 +304,26 @@
         </div>
         <div id="dbTableWrap"><table id="dbTable"></table></div>
       </div>
+
+      <div id="logsView" hidden>
+        <div id="logFilters">
+          <select id="logSource" title="Which process's log file">
+            <option value="engine">engine.log</option>
+            <option value="dev-ui">dev-ui.log</option>
+          </select>
+          <select id="logLevel" title="Minimum level">
+            <option value="debug">debug +</option>
+            <option value="info" selected>info +</option>
+            <option value="warn">warn +</option>
+            <option value="error">error</option>
+          </select>
+          <input id="logThread" class="mono" placeholder="threadId (exact)" spellcheck="false" title="Per-thread log view: only entries carrying this threadId">
+          <input id="logSearch" placeholder="search text…" spellcheck="false">
+          <span id="logMeta"></span>
+          <label class="follow" title="Auto-scroll to the newest entries"><input type="checkbox" id="logFollow" checked> follow</label>
+        </div>
+        <div id="logList"></div>
+      </div>
     </main>
   </div>
 
@@ -252,10 +343,13 @@ const state = {
   db: { rows: [], stats: null, expanded: null, lastRowsJson: "", lastStatsJson: "" },
   expandedMessage: null,
   stampedIds: new Set(),
+  failed: [],
+  lastFailedJson: "",
+  logs: { entries: [], lastJson: "", meta: "" },
 };
 
 const DB_COLUMNS = [
-  "id", "thread_id", "role", "content", "status", "in_reply_to",
+  "id", "thread_id", "customer_id", "role", "content", "status", "in_reply_to",
   "worker_id", "locked_at", "attempt_count", "error",
   "model", "tokens_in", "tokens_out", "cost_usd", "metadata",
   "sent_to_customer_at", "created_at", "completed_at",
@@ -421,9 +515,9 @@ function renderMessages() {
     idEl.title = m.id;
     idEl.textContent = m.id.length > 24 ? m.id.slice(0, 24) + "…" : m.id;
     foot.appendChild(idEl);
-    if (m.metadata && m.metadata.customerId) {
+    if (m.customerId) {
       const cust = document.createElement("span");
-      cust.textContent = "· " + m.metadata.customerId;
+      cust.textContent = "· " + m.customerId;
       foot.appendChild(cust);
     }
     if (m.role === "customer") {
@@ -464,6 +558,7 @@ function renderMessages() {
       tech.onclick = (e) => e.stopPropagation();
       tech.textContent = JSON.stringify({
         id: m.id,
+        customer_id: m.customerId,
         status: m.status,
         worker_id: m.workerId,
         attempt_count: m.attemptCount,
@@ -491,6 +586,7 @@ function setView(view) {
   state.view = view;
   $("chatView").hidden = view !== "chat";
   $("dbView").hidden = view !== "db";
+  $("logsView").hidden = view !== "logs";
   for (const btn of document.querySelectorAll("#viewToggle button")) {
     btn.classList.toggle("active", btn.dataset.view === view);
   }
@@ -610,6 +706,155 @@ for (const id of ["dbStatus", "dbRole", "dbThread", "dbLimit"]) {
   });
 }
 
+function fmtLogTime(ts) {
+  return typeof ts === "string" && ts.length >= 23 ? ts.slice(11, 23) : String(ts ?? "");
+}
+
+function renderLogs() {
+  const list = $("logList");
+  const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+  list.textContent = "";
+
+  if (state.logs.entries.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = state.logs.meta || "No log entries match.";
+    list.appendChild(empty);
+    $("logMeta").textContent = "";
+    return;
+  }
+
+  for (const entry of state.logs.entries) {
+    const row = document.createElement("div");
+    row.className = "log-row";
+
+    const time = document.createElement("span");
+    time.className = "log-time";
+    time.textContent = fmtLogTime(entry.timestamp);
+    row.appendChild(time);
+
+    const lvl = document.createElement("span");
+    lvl.className = "log-lvl " + (entry.level || "info");
+    lvl.textContent = entry.level || "info";
+    row.appendChild(lvl);
+
+    const event = document.createElement("span");
+    event.className = "log-event";
+    event.textContent = entry.event || "?";
+    row.appendChild(event);
+
+    const rest = { ...entry };
+    delete rest.timestamp;
+    delete rest.level;
+    delete rest.event;
+    const fields = document.createElement("span");
+    fields.className = "log-fields";
+    const restJson = JSON.stringify(rest);
+    fields.textContent = restJson === "{}" ? "" : restJson;
+    row.appendChild(fields);
+
+    list.appendChild(row);
+  }
+  $("logMeta").textContent = state.logs.meta;
+  if ($("logFollow").checked || nearBottom) list.scrollTop = list.scrollHeight;
+}
+
+async function refreshLogs() {
+  const params = new URLSearchParams();
+  params.set("source", $("logSource").value);
+  params.set("minLevel", $("logLevel").value);
+  if ($("logThread").value.trim()) params.set("thread", $("logThread").value.trim());
+  if ($("logSearch").value.trim()) params.set("q", $("logSearch").value.trim());
+  params.set("limit", "300");
+
+  const res = await api("/api/logs?" + params.toString());
+  const resJson = JSON.stringify(res);
+  if (resJson === state.logs.lastJson) return;
+  state.logs.lastJson = resJson;
+  state.logs.entries = res.entries;
+  state.logs.meta = res.missing
+    ? "No log file yet at " + res.path + " — start that process first."
+    : res.entries.length + " entries · " + $("logSource").value + ".log · " +
+      (res.sizeBytes / 1024).toFixed(1) + " KB";
+  renderLogs();
+}
+
+for (const id of ["logSource", "logLevel", "logThread", "logSearch"]) {
+  $(id).addEventListener("input", () => {
+    state.logs.lastJson = "";
+    refresh();
+  });
+}
+
+$("threadLogs").onclick = () => {
+  if (!state.active) return;
+  $("logThread").value = state.active;
+  state.logs.lastJson = "";
+  setView("logs");
+  refresh();
+};
+
+function renderFailed() {
+  const panel = $("failedPanel");
+  const list = $("failedList");
+  panel.hidden = state.failed.length === 0;
+  list.textContent = "";
+  for (const m of state.failed) {
+    const li = document.createElement("li");
+    li.onclick = () => selectThread(m.threadId);
+    li.title = "Open thread " + m.threadId;
+
+    const row = document.createElement("div");
+    row.className = "f-row";
+    const thread = document.createElement("span");
+    thread.className = "f-thread mono";
+    thread.textContent = m.threadId;
+    const time = document.createElement("span");
+    time.className = "f-time";
+    time.textContent = fmtAgo(m.createdAt);
+    row.append(thread, time);
+    li.appendChild(row);
+
+    const snippet = document.createElement("div");
+    snippet.className = "f-snippet";
+    snippet.textContent = m.content;
+    li.appendChild(snippet);
+
+    const error = document.createElement("div");
+    error.className = "f-error";
+    error.title = m.error || "";
+    error.textContent = m.error || "no error recorded";
+    li.appendChild(error);
+
+    const actions = document.createElement("div");
+    actions.className = "f-actions";
+    const attempts = document.createElement("span");
+    attempts.className = "f-attempts";
+    attempts.textContent = "attempts: " + m.attemptCount;
+    const route = document.createElement("button");
+    route.type = "button";
+    route.className = "route";
+    route.textContent = "Route to human";
+    route.title = "Acknowledge this failure: assign a human and stamp sent_to_customer_at (spec §3.2)";
+    route.onclick = async (e) => {
+      e.stopPropagation();
+      try {
+        const res = await api("/api/messages/" + encodeURIComponent(m.id) + "/failed_ack", { method: "POST" });
+        toast(res.acknowledged
+          ? "Routed to human — failure acknowledged ✓"
+          : "Already acknowledged elsewhere", "ok");
+        state.lastFailedJson = "";
+        refresh();
+      } catch (err) {
+        toast("Acknowledge failed: " + err.message, "warn");
+      }
+    };
+    actions.append(attempts, route);
+    li.appendChild(actions);
+    list.appendChild(li);
+  }
+}
+
 function selectThread(id) {
   setView("chat");
   state.active = id;
@@ -617,6 +862,7 @@ function selectThread(id) {
   state.messages = [];
   $("threadTitle").textContent = id;
   $("threadHint").textContent = "";
+  $("threadLogs").hidden = false;
   renderThreads();
   renderMessages();
   refresh();
@@ -631,7 +877,7 @@ async function redeliver(m) {
         threadId: m.threadId,
         content: m.content,
         externalId: m.id,
-        customerId: (m.metadata && m.metadata.customerId) || "cust_anon",
+        customerId: m.customerId || "cust_anon",
       }),
     });
     if (res.inserted) {
@@ -677,6 +923,18 @@ async function refresh() {
     }
     if (state.view === "db") {
       await refreshDb();
+    }
+    if (state.view === "logs") {
+      await refreshLogs();
+    }
+    // Failure poll (spec §3.2): a real platform would poll idx_messages_failed
+    // exactly like this, in every state of the UI.
+    const failed = await api("/api/failed");
+    const failedJson = JSON.stringify(failed);
+    if (failedJson !== state.lastFailedJson) {
+      state.lastFailedJson = failedJson;
+      state.failed = failed;
+      renderFailed();
     }
     $("connDot").className = "ok";
     $("connText").textContent = "connected";

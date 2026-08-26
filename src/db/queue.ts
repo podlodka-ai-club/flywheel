@@ -34,6 +34,57 @@ export function claimNextMessage(
   return row === undefined ? null : rowToRecord(row);
 }
 
+/**
+ * Freshness check & coalescing (spec §4.3): claim every pending customer
+ * message that arrived in this thread while the anchor was being processed.
+ * Per-thread serialization (§4.1) guarantees no other worker can take them
+ * while the anchor is 'processing', so this single atomic UPDATE is safe.
+ * Returned oldest-first.
+ */
+export function claimThreadFollowUps(
+  db: DatabaseSync,
+  threadId: string,
+  workerId: string,
+  now: number,
+): MessageRecord[] {
+  const rows = db.prepare(
+    `UPDATE messages
+     SET status = 'processing',
+         worker_id = ?,
+         locked_at = ?,
+         attempt_count = attempt_count + 1
+     WHERE thread_id = ? AND status = 'pending' AND role = 'customer'
+     RETURNING *`,
+  ).all(workerId, now, threadId).map(rowToRecord);
+  return rows.sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1));
+}
+
+/**
+ * Zombie recovery (spec §4.2): stale leases with retries left go back to
+ * 'pending'; stale leases that exhausted retries become terminal 'failed'
+ * (surfaced to the platform via idx_messages_failed, spec §3.2).
+ */
+export function reapExpiredLeases(
+  db: DatabaseSync,
+  args: { now: number; lockTimeoutMs: number; maxRetries: number },
+): { reclaimed: MessageRecord[]; failed: MessageRecord[] } {
+  const cutoff = args.now - args.lockTimeoutMs;
+  const reclaimed = db.prepare(
+    `UPDATE messages
+     SET status = 'pending', worker_id = NULL, locked_at = NULL
+     WHERE status = 'processing' AND locked_at < ? AND attempt_count < ?
+     RETURNING *`,
+  ).all(cutoff, args.maxRetries).map(rowToRecord);
+  const failed = db.prepare(
+    `UPDATE messages
+     SET status = 'failed', worker_id = NULL, locked_at = NULL,
+         error = COALESCE(error, 'lease expired; retry limit reached')
+     WHERE status = 'processing' AND locked_at < ? AND attempt_count >= ?
+     RETURNING *`,
+  ).all(cutoff, args.maxRetries).map(rowToRecord);
+  return { reclaimed, failed };
+}
+
 export interface ReplyInsert {
   id: string;
   content: string;
@@ -64,29 +115,35 @@ export function completeWithReply(
     threadId: string;
     workerId: string;
     reply: ReplyInsert;
+    /** Coalesced follow-up ids (spec §4.3), completed in the same transaction. */
+    extraIds?: string[];
     now?: number;
   },
 ): CompletionOutcome {
   const now = args.now ?? Date.now();
+  const ids = [args.anchorId, ...(args.extraIds ?? [])];
   db.exec("BEGIN IMMEDIATE");
   try {
     const fence = db.prepare(
       `UPDATE messages
        SET status = 'completed', completed_at = ?
-       WHERE id = ? AND worker_id = ? AND status = 'processing'`,
-    ).run(now, args.anchorId, args.workerId);
-    if (Number(fence.changes) !== 1) {
+       WHERE id IN (${ids.map(() => "?").join(", ")})
+         AND worker_id = ? AND status = 'processing'`,
+    ).run(now, ...ids, args.workerId);
+    if (Number(fence.changes) !== ids.length) {
       db.exec("ROLLBACK");
       return "lost_lease";
     }
     db.prepare(
       `INSERT INTO messages
-         (id, thread_id, role, content, status, in_reply_to,
+         (id, thread_id, customer_id, role, content, status, in_reply_to,
           model, tokens_in, tokens_out, cost_usd, metadata, created_at, completed_at)
-       VALUES (?, ?, 'assistant', ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, (SELECT customer_id FROM messages WHERE id = ?),
+               'assistant', ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       args.reply.id,
       args.threadId,
+      args.anchorId,
       args.reply.content,
       args.anchorId,
       args.reply.model,

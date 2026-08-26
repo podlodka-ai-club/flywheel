@@ -1,7 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { AgentHarness } from "../agent/harness.ts";
 import { getCompletedThreadHistory, type MessageRecord } from "../db/messages.ts";
-import { claimNextMessage, completeWithReply, markFailed, releaseClaim } from "../db/queue.ts";
+import {
+  claimNextMessage,
+  claimThreadFollowUps,
+  completeWithReply,
+  markFailed,
+  releaseClaim,
+} from "../db/queue.ts";
 import { logger } from "../logger/index.ts";
 
 export interface WorkerOptions {
@@ -45,19 +51,42 @@ export function startWorkers(
       workerId,
       attempt: claimed.attemptCount,
     });
+    const extras: MessageRecord[] = [];
     try {
       const history = getCompletedThreadHistory(db, claimed.threadId);
-      const reply = await harness.run({
+      const runInput = {
         threadId: claimed.threadId,
+        customerId: claimed.customerId,
         message: claimed,
         history,
+        followUps: extras,
         signal: abort.signal,
-      });
+      };
+      let reply = await harness.run(runInput);
+
+      // Pre-commit freshness check (spec §4.3): fold in customer messages
+      // that arrived during generation; repeat until the check comes back
+      // empty, so one consolidated reply covers everything.
+      while (!abort.signal.aborted) {
+        const fresh = claimThreadFollowUps(db, claimed.threadId, workerId, Date.now());
+        if (fresh.length === 0) break;
+        extras.push(...fresh);
+        logger.info("followups_coalesced", {
+          threadId: claimed.threadId,
+          anchorId: claimed.id,
+          workerId,
+          messageIds: fresh.map((m) => m.id),
+          totalCoalesced: extras.length,
+        });
+        reply = await harness.run(runInput);
+      }
+
       const responseId = `msg_${crypto.randomUUID()}`;
       const outcome = completeWithReply(db, {
         anchorId: claimed.id,
         threadId: claimed.threadId,
         workerId,
+        extraIds: extras.map((m) => m.id),
         reply: { ...reply, id: responseId, metadata: reply.metadata ?? null },
       });
       if (outcome === "committed") {
@@ -69,9 +98,12 @@ export function startWorkers(
           model: reply.model,
           tokensIn: reply.tokensIn,
           tokensOut: reply.tokensOut,
+          coalescedCount: extras.length,
           totalDurationMs: Date.now() - startedAt,
         });
       } else {
+        // Lease lost mid-run: discard the reply, return still-owned claims.
+        releaseOwnedClaims(workerId, extras);
         logger.warn("reply_discarded_lost_lease", {
           threadId: claimed.threadId,
           messageId: claimed.id,
@@ -81,6 +113,7 @@ export function startWorkers(
       }
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
+      releaseOwnedClaims(workerId, extras);
       if (claimed.attemptCount >= options.maxRetries) {
         const marked = markFailed(db, claimed.id, workerId, error);
         logger.error("message_failed", {
@@ -102,6 +135,12 @@ export function startWorkers(
           released,
         });
       }
+    }
+  }
+
+  function releaseOwnedClaims(workerId: string, messages: MessageRecord[]): void {
+    for (const message of messages) {
+      releaseClaim(db, message.id, workerId);
     }
   }
 

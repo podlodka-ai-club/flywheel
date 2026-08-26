@@ -40,7 +40,8 @@ Deno.test("insertCustomerMessage + getMessage round-trips all fields", async () 
       id: "ext_42",
       threadId: "tkt_9",
       content: "where is my order?",
-      metadata: { customerId: "cust_7", channel: "dev-ui" },
+      customerId: "cust_7",
+      metadata: { channel: "dev-ui" },
       createdAt: 1000,
     });
     assert(inserted);
@@ -48,10 +49,11 @@ Deno.test("insertCustomerMessage + getMessage round-trips all fields", async () 
     const record = getMessage(db, "ext_42");
     assert(record !== null);
     assertEquals(record.threadId, "tkt_9");
+    assertEquals(record.customerId, "cust_7");
     assertEquals(record.role, "customer");
     assertEquals(record.status, "pending");
     assertEquals(record.content, "where is my order?");
-    assertEquals(record.metadata, { customerId: "cust_7", channel: "dev-ui" });
+    assertEquals(record.metadata, { channel: "dev-ui" });
     assertEquals(record.createdAt, 1000);
     assertEquals(record.attemptCount, 0);
     assertEquals(record.inReplyTo, null);
