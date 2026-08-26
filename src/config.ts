@@ -1,0 +1,42 @@
+export interface Config {
+  databasePath: string;
+  lockTimeoutMs: number;
+  maxRetries: number;
+  logLevel: "debug" | "info" | "warn" | "error";
+  devUiPort: number;
+}
+
+function envStr(name: string, fallback: string): string {
+  const value = Deno.env.get(name);
+  return value === undefined || value === "" ? fallback : value;
+}
+
+function envInt(name: string, fallback: number): number {
+  const raw = Deno.env.get(name);
+  if (raw === undefined || raw === "") return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`Invalid ${name}: expected a positive integer, got "${raw}"`);
+  }
+  return parsed;
+}
+
+function envLogLevel(name: string, fallback: Config["logLevel"]): Config["logLevel"] {
+  const raw = envStr(name, fallback);
+  if (raw !== "debug" && raw !== "info" && raw !== "warn" && raw !== "error") {
+    throw new Error(`Invalid ${name}: expected debug|info|warn|error, got "${raw}"`);
+  }
+  return raw;
+}
+
+export function loadConfig(): Config {
+  return {
+    databasePath: envStr("DATABASE_PATH", "./data/support.db"),
+    lockTimeoutMs: envInt("LOCK_TIMEOUT_MS", 600_000),
+    maxRetries: envInt("MAX_RETRIES", 3),
+    logLevel: envLogLevel("LOG_LEVEL", "info"),
+    devUiPort: envInt("DEV_UI_PORT", 8787),
+  };
+}
+
+export const config: Config = loadConfig();

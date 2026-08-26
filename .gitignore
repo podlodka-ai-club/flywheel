@@ -2,6 +2,12 @@
 .env
 .env.local
 
+# SQLite database (queue + conversation history)
+data/
+
 # Operating System
 .DS_Store
 Thumbs.db
+
+# Agents
+.claude

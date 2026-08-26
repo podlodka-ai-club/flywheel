@@ -1,6 +1,8 @@
 {
   "tasks": {
-    "dev": "deno run --watch --allow-net main.ts"
+    "db:init": "deno run --allow-env=DATABASE_PATH,LOCK_TIMEOUT_MS,MAX_RETRIES,LOG_LEVEL,DEV_UI_PORT --allow-read=./data,./schema.sql --allow-write=./data src/db/client.ts",
+    "dev:ui": "deno run --watch --allow-env=DATABASE_PATH,LOCK_TIMEOUT_MS,MAX_RETRIES,LOG_LEVEL,DEV_UI_PORT,PORT --allow-read=./data,./schema.sql,./tools/ui --allow-write=./data --allow-net=127.0.0.1 tools/ui/server.ts",
+    "test": "deno test --allow-read --allow-write --allow-env tests/"
   },
   "imports": {
     "@std/assert": "jsr:@std/assert@1"

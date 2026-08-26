@@ -25,6 +25,7 @@ Your testing loop: `deno task start` (engine) in one terminal, `deno task dev:ui
   - a "↻ redeliver" button on customer messages that re-POSTs with the same external id (simulates webhook redelivery)
   - JSON API: `GET /api/threads`, `GET /api/threads/:id/messages`, `POST /api/messages` (`INSERT OR IGNORE`)
 - Tasks: `deno task db:init`, `deno task dev:ui`
+- **Database view** (added on request): read-only raw `messages` table browser in the harness — every technical column (locking, attempts, telemetry, timestamps), status/role/thread filters, click a row for the full record as JSON, stats bar with row counts / WAL mode / file size, pause toggle for inspection
 
 **You verify:**
 1. `deno task db:init` creates the DB; running it twice is harmless.
