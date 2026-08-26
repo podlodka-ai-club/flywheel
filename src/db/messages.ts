@@ -36,7 +36,7 @@ export interface ThreadSummary {
 }
 
 // deno-lint-ignore no-explicit-any
-function rowToRecord(row: any): MessageRecord {
+export function rowToRecord(row: any): MessageRecord {
   let metadata: Record<string, unknown> | null = null;
   if (row.metadata != null) {
     try {
@@ -106,6 +106,31 @@ export function getThreadMessages(db: DatabaseSync, threadId: string): MessageRe
   return db.prepare(
     "SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at ASC, id ASC",
   ).all(threadId).map(rowToRecord);
+}
+
+/**
+ * Hydration source (spec §5.1): the completed conversational rows of a thread,
+ * oldest first. The in-flight (processing) anchor message is NOT included —
+ * the worker passes its content to the agent separately.
+ */
+export function getCompletedThreadHistory(db: DatabaseSync, threadId: string): MessageRecord[] {
+  return db.prepare(
+    `SELECT * FROM messages
+     WHERE thread_id = ? AND status = 'completed' AND role IN ('customer', 'assistant')
+     ORDER BY created_at ASC, id ASC`,
+  ).all(threadId).map(rowToRecord);
+}
+
+/**
+ * Dispatcher contract (spec §3.2): stamp delivery on a completed assistant
+ * reply. Guarded so only deliverable rows are stamped, exactly once.
+ */
+export function markDelivered(db: DatabaseSync, id: string, now: number): boolean {
+  const result = db.prepare(
+    `UPDATE messages SET sent_to_customer_at = ?
+     WHERE id = ? AND role = 'assistant' AND status = 'completed' AND sent_to_customer_at IS NULL`,
+  ).run(now, id);
+  return Number(result.changes) > 0;
 }
 
 export function listThreads(db: DatabaseSync): ThreadSummary[] {

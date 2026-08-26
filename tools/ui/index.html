@@ -80,6 +80,13 @@
     border-radius: 6px; padding: 2px 8px; cursor: pointer; font-size: 11px;
   }
   .m-foot .redeliver:hover { color: var(--text); border-color: var(--muted); }
+  .m-foot .tick { color: var(--completed); }
+  .m-foot .dispatching { color: var(--muted); }
+  .m-tech {
+    margin-top: 8px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px; white-space: pre; overflow-x: auto;
+  }
 
   .chip {
     display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px;
@@ -243,6 +250,8 @@ const state = {
   lastThreadsJson: "",
   lastMessagesJson: "",
   db: { rows: [], stats: null, expanded: null, lastRowsJson: "", lastStatsJson: "" },
+  expandedMessage: null,
+  stampedIds: new Set(),
 };
 
 const DB_COLUMNS = [
@@ -375,6 +384,11 @@ function renderMessages() {
   for (const m of state.messages) {
     const el = document.createElement("div");
     el.className = "msg " + m.role;
+    el.title = "Click for technical details";
+    el.onclick = () => {
+      state.expandedMessage = state.expandedMessage === m.id ? null : m.id;
+      renderMessages();
+    };
 
     const head = document.createElement("div");
     head.className = "m-head";
@@ -383,7 +397,7 @@ function renderMessages() {
     role.textContent = m.role;
     head.appendChild(role);
     head.appendChild(chip(m.status));
-    if (m.attemptCount > 0) {
+    if (m.attemptCount > 1) {
       const att = document.createElement("span");
       att.className = "m-time";
       att.textContent = "attempts: " + m.attemptCount;
@@ -418,10 +432,55 @@ function renderMessages() {
       btn.className = "redeliver";
       btn.textContent = "↻ redeliver";
       btn.title = "Simulate at-least-once webhook redelivery: re-ingest this message with the same external id";
-      btn.onclick = () => redeliver(m);
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        redeliver(m);
+      };
       foot.appendChild(btn);
     }
+    if (m.role === "assistant") {
+      if (m.inReplyTo) {
+        const rel = document.createElement("span");
+        rel.className = "mono";
+        rel.title = "in_reply_to: " + m.inReplyTo;
+        rel.textContent = "↩ " + (m.inReplyTo.length > 16 ? m.inReplyTo.slice(0, 16) + "…" : m.inReplyTo);
+        foot.appendChild(rel);
+      }
+      const tick = document.createElement("span");
+      if (m.sentToCustomerAt) {
+        tick.className = "tick";
+        tick.textContent = "✓ delivered " + fmtTime(m.sentToCustomerAt);
+      } else {
+        tick.className = "dispatching";
+        tick.textContent = "⏳ dispatching…";
+      }
+      foot.appendChild(tick);
+    }
     el.appendChild(foot);
+
+    if (state.expandedMessage === m.id) {
+      const tech = document.createElement("div");
+      tech.className = "m-tech";
+      tech.onclick = (e) => e.stopPropagation();
+      tech.textContent = JSON.stringify({
+        id: m.id,
+        status: m.status,
+        worker_id: m.workerId,
+        attempt_count: m.attemptCount,
+        in_reply_to: m.inReplyTo,
+        locked_at: m.lockedAt && new Date(m.lockedAt).toISOString(),
+        created_at: new Date(m.createdAt).toISOString(),
+        completed_at: m.completedAt && new Date(m.completedAt).toISOString(),
+        sent_to_customer_at: m.sentToCustomerAt && new Date(m.sentToCustomerAt).toISOString(),
+        error: m.error,
+        model: m.model,
+        tokens_in: m.tokensIn,
+        tokens_out: m.tokensOut,
+        cost_usd: m.costUsd,
+        metadata: m.metadata,
+      }, null, 2);
+      el.appendChild(tech);
+    }
     box.appendChild(el);
   }
 
@@ -602,6 +661,18 @@ async function refresh() {
         state.lastMessagesJson = messagesJson;
         state.messages = messages;
         renderMessages();
+      }
+      // Dispatcher simulation: rendering a completed reply in the customer's
+      // view "delivers" it — stamp sent_to_customer_at exactly once.
+      for (const m of messages) {
+        if (
+          m.role === "assistant" && m.status === "completed" &&
+          m.sentToCustomerAt === null && !state.stampedIds.has(m.id)
+        ) {
+          state.stampedIds.add(m.id);
+          api("/api/messages/" + encodeURIComponent(m.id) + "/delivered", { method: "POST" })
+            .catch(() => state.stampedIds.delete(m.id));
+        }
       }
     }
     if (state.view === "db") {

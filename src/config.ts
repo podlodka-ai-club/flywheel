@@ -4,6 +4,9 @@ export interface Config {
   maxRetries: number;
   logLevel: "debug" | "info" | "warn" | "error";
   devUiPort: number;
+  workerConcurrency: number;
+  pollIntervalMs: number;
+  agentMode: "echo" | "llm";
 }
 
 function envStr(name: string, fallback: string): string {
@@ -29,6 +32,14 @@ function envLogLevel(name: string, fallback: Config["logLevel"]): Config["logLev
   return raw;
 }
 
+function envAgentMode(name: string, fallback: Config["agentMode"]): Config["agentMode"] {
+  const raw = envStr(name, fallback);
+  if (raw !== "echo" && raw !== "llm") {
+    throw new Error(`Invalid ${name}: expected echo|llm, got "${raw}"`);
+  }
+  return raw;
+}
+
 export function loadConfig(): Config {
   return {
     databasePath: envStr("DATABASE_PATH", "./data/support.db"),
@@ -36,6 +47,10 @@ export function loadConfig(): Config {
     maxRetries: envInt("MAX_RETRIES", 3),
     logLevel: envLogLevel("LOG_LEVEL", "info"),
     devUiPort: envInt("DEV_UI_PORT", 8787),
+    workerConcurrency: envInt("WORKER_CONCURRENCY", 2),
+    pollIntervalMs: envInt("POLL_INTERVAL_MS", 500),
+    // Echo until Milestone 4 delivers the real pi.dev harness.
+    agentMode: envAgentMode("AGENT_MODE", "echo"),
   };
 }
 

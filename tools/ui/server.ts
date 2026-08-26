@@ -6,7 +6,7 @@
 import { config } from "../../src/config.ts";
 import { logger } from "../../src/logger/index.ts";
 import { openDb } from "../../src/db/client.ts";
-import { getThreadMessages, insertCustomerMessage, listThreads } from "../../src/db/messages.ts";
+import { getThreadMessages, insertCustomerMessage, listThreads, markDelivered } from "../../src/db/messages.ts";
 
 const db = openDb(config.databasePath);
 const INDEX_HTML_URL = new URL("./index.html", import.meta.url);
@@ -136,6 +136,13 @@ async function handler(req: Request): Promise<Response> {
   }
   if (req.method === "POST" && pathname === "/api/messages") {
     return await handleIngest(req);
+  }
+  const deliveredMatch = pathname.match(/^\/api\/messages\/([^/]+)\/delivered$/);
+  if (req.method === "POST" && deliveredMatch) {
+    const id = decodeURIComponent(deliveredMatch[1]);
+    const delivered = markDelivered(db, id, Date.now());
+    if (delivered) logger.info("dev_ui_reply_delivered", { messageId: id });
+    return json({ delivered });
   }
   if (req.method === "GET" && pathname === "/api/db/messages") {
     return handleDbMessages(url);

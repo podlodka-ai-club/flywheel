@@ -1,0 +1,138 @@
+import type { DatabaseSync } from "node:sqlite";
+import type { AgentHarness } from "../agent/harness.ts";
+import { getCompletedThreadHistory, type MessageRecord } from "../db/messages.ts";
+import { claimNextMessage, completeWithReply, markFailed, releaseClaim } from "../db/queue.ts";
+import { logger } from "../logger/index.ts";
+
+export interface WorkerOptions {
+  workerConcurrency: number;
+  pollIntervalMs: number;
+  maxRetries: number;
+}
+
+export interface EnginePool {
+  stop(): Promise<void>;
+}
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const timer = setTimeout(() => resolve(), ms);
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  });
+}
+
+/**
+ * N concurrent polling loops over one synchronous SQLite connection. All DB
+ * calls are synchronous and transactions never span an await, so loops can
+ * interleave only at poll/agent awaits — claim atomicity does the rest.
+ */
+export function startWorkers(
+  db: DatabaseSync,
+  harness: AgentHarness,
+  options: WorkerOptions,
+): EnginePool {
+  const abort = new AbortController();
+
+  async function processMessage(workerId: string, claimed: MessageRecord): Promise<void> {
+    const startedAt = Date.now();
+    logger.info("message_claimed", {
+      threadId: claimed.threadId,
+      messageId: claimed.id,
+      workerId,
+      attempt: claimed.attemptCount,
+    });
+    try {
+      const history = getCompletedThreadHistory(db, claimed.threadId);
+      const reply = await harness.run({
+        threadId: claimed.threadId,
+        message: claimed,
+        history,
+        signal: abort.signal,
+      });
+      const responseId = `msg_${crypto.randomUUID()}`;
+      const outcome = completeWithReply(db, {
+        anchorId: claimed.id,
+        threadId: claimed.threadId,
+        workerId,
+        reply: { ...reply, id: responseId, metadata: reply.metadata ?? null },
+      });
+      if (outcome === "committed") {
+        logger.info("message_completed", {
+          threadId: claimed.threadId,
+          messageId: claimed.id,
+          responseId,
+          workerId,
+          model: reply.model,
+          tokensIn: reply.tokensIn,
+          tokensOut: reply.tokensOut,
+          totalDurationMs: Date.now() - startedAt,
+        });
+      } else {
+        logger.warn("reply_discarded_lost_lease", {
+          threadId: claimed.threadId,
+          messageId: claimed.id,
+          workerId,
+          attempt: claimed.attemptCount,
+        });
+      }
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      if (claimed.attemptCount >= options.maxRetries) {
+        const marked = markFailed(db, claimed.id, workerId, error);
+        logger.error("message_failed", {
+          threadId: claimed.threadId,
+          messageId: claimed.id,
+          workerId,
+          attempt: claimed.attemptCount,
+          error,
+          marked,
+        });
+      } else {
+        const released = releaseClaim(db, claimed.id, workerId);
+        logger.warn("message_retry_released", {
+          threadId: claimed.threadId,
+          messageId: claimed.id,
+          workerId,
+          attempt: claimed.attemptCount,
+          error,
+          released,
+        });
+      }
+    }
+  }
+
+  async function runLoop(workerId: string): Promise<void> {
+    logger.debug("worker_started", { workerId });
+    while (!abort.signal.aborted) {
+      let claimed: MessageRecord | null = null;
+      try {
+        claimed = claimNextMessage(db, workerId, Date.now());
+      } catch (err) {
+        logger.error("claim_error", { workerId, error: String(err) });
+      }
+      if (claimed === null) {
+        // Jitter keeps in-process loops from polling in lockstep.
+        await sleep(options.pollIntervalMs * (0.8 + Math.random() * 0.4), abort.signal);
+        continue;
+      }
+      await processMessage(workerId, claimed);
+    }
+    logger.debug("worker_stopped", { workerId });
+  }
+
+  const loops = Array.from(
+    { length: options.workerConcurrency },
+    (_, i) => runLoop(`worker-${i}-${crypto.randomUUID().slice(0, 8)}`),
+  );
+
+  return {
+    async stop(): Promise<void> {
+      abort.abort();
+      await Promise.all(loops);
+    },
+  };
+}
