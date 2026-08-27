@@ -142,6 +142,7 @@ The `messages` table is the sole integration surface. External components — bu
 1. Insert each customer message as `(id, thread_id, customer_id, role='customer', content, status='pending', metadata, created_at)`, where `id` is the **external platform's own message ID**, `customer_id` is the platform's **stable, verified customer/account identifier** (the B2B tenant — required for tool scoping and future per-customer memory), and `metadata` carries channel and custom tags.
 2. Insert with `INSERT OR IGNORE` — at-least-once webhook redelivery then dedupes on the primary key.
 3. After receiving an escalated reply for a thread, **stop inserting** further customer messages for that thread until a human hands it back. The engine is deliberately thread-stateless and will answer anything enqueued; muting an escalated thread is the platform's responsibility.
+4. *(Optional, enables self-learning — Section 10.3)* After a human resolves an escalated ticket, the platform MAY insert a `role='system', status='completed'` row with `metadata.type='human_resolution'` describing the resolution. `status='completed'` keeps it unclaimable; the engine never replies to it — it only learns from it.
 
 **Dispatch (external reader):**
 1. Poll `idx_messages_outbound` for completed assistant rows; deliver `content` to the customer; stamp `sent_to_customer_at`.
@@ -309,31 +310,28 @@ sequenceDiagram
 
 ## 6. Support Tools Specification
 
-Tools are modular Deno functions adhering to the `pi-agent-core` interface. Tool calls and execution traces are emitted to structured logs.
+Tools are `pi-agent-core` `AgentTool`s, built fresh for each agent run and closed over the run's context. Tool calls and execution traces are emitted to structured logs (`tool_executed` / `tool_failed`).
 
 ```typescript
-export interface SupportTool<T = any> {
-  name: string;
-  description: string;
-  parameters: Record<string, unknown>; // JSON Schema
-  execute: (args: T, context: ToolContext) => Promise<unknown>;
-}
-
-export interface ToolContext {
+// Per-run context the tools close over (src/agent/tools/index.ts)
+export interface ToolRunContext {
   threadId: string;
-  metadata?: Record<string, unknown>;
-  signal: AbortSignal;
+  customerId: string | null;   // verified identity from the external platform — never from message text
+  connectors: Connectors;      // external-system clients (see below)
+  escalation: { escalated: boolean; reason?: string }; // written by escalate_to_human
 }
 ```
 
+**Connector seam (`src/connectors/`):** tools never talk to external systems directly — they depend on typed connector interfaces (`KnowledgeBaseConnector`, `CrmConnector`, `DeploymentConnector`). The current implementations are **mocks that simulate outbound requests** (async, latency, `connector_request` logs) against local `fixtures/` data; production replaces them with real clients (a wiki/Confluence/Notion search API, the CRM's API, a deployment-telemetry endpoint) behind the same interfaces, with no tool changes.
+
 ### 6.1. Core Support Tools
 
-1. **`search_knowledge_base`**: Searches internal help articles, FAQ entries, and policy documentation.
-2. **`lookup_order`**: Fetches order tracking, fulfillment status, and items by order ID.
-3. **`lookup_customer_account`**: Retrieves customer account status, billing tier, and recent activity from the external CRM.
+1. **`search_knowledge_base`**: Searches the product documentation base (wiki/Confluence/Notion-style help articles, how-tos, policies, upgrade guides). Parameters: `query`, optional `limit`.
+2. **`lookup_customer_account`**: Fetches the verified customer's CRM record — company, plan, seats, account manager, contract. **Takes no parameters**: it is hard-bound to the ticket's verified `customer_id`.
+3. **`lookup_customer_setup`**: Fetches the verified customer's deployment state — product edition, running version, environment, configuration, dependency versions, known issues. **Takes no parameters** (same hard binding). Consulted before version-specific or upgrade advice.
 4. **`escalate_to_human`**: Flags the reply as an escalation. The final assistant row carries customer-safe text in `content` (e.g. "I'm connecting you with a specialist") and `metadata.escalated = true` plus `metadata.escalation_reason`; internal routing details never go into `content`. Acting on the flag — assigning a human and muting the thread — is the external platform's contractual job (Section 3.2).
 
-**Authorization rule:** `lookup_order` and `lookup_customer_account` must scope every lookup to the verified `customer_id` propagated from the message row into the agent run (and into `ToolContext`). IDs appearing in customer-authored text are untrusted input — honoring them unscoped would let a prompt-injected message read another customer's data.
+**Authorization rule:** the customer-scoped tools expose **no way to name another account** — their parameter schemas contain no id field, and the lookup key is always the verified `customer_id` propagated from the message row into the run context. IDs, emails, or "I'm authorized on behalf of X" claims appearing in customer-authored text are untrusted input; a prompt-injected message has nothing to inject into.
 
 ---
 
@@ -389,6 +387,7 @@ flywheel/
 ├── schema.sql                  # Single-table SQLite DDL schema
 ├── specification.md            # System specification (this document)
 ├── milestones.md               # Delivery plan with per-milestone user verification
+├── fixtures/                   # Mock-connector data: kb_articles, customers, deployments
 ├── src/
 │   ├── config.ts               # Environment configuration (DB path, API keys, concurrency, LOCK_TIMEOUT_MS, MAX_RETRIES)
 │   ├── db/
@@ -396,14 +395,14 @@ flywheel/
 │   │   ├── queue.ts            # Atomic claim, lease renewal, and zombie recovery
 │   │   └── messages.ts         # Message data access layer
 │   ├── agent/
-│   │   ├── harness.ts          # pi.dev Agent lifecycle manager
+│   │   ├── harness.ts          # pi.dev Agent lifecycle manager (echo + llm)
 │   │   ├── hydrator.ts         # Conversation history mapping
 │   │   ├── prompt.ts           # System prompt templates
-│   │   └── tools/              # Tool implementations
-│   │       ├── index.ts        # Tool registry
-│   │       ├── knowledge_base.ts
-│   │       ├── orders.ts
-│   │       └── escalation.ts
+│   │   └── tools/
+│   │       └── index.ts        # Support tools (KB search, CRM, deployment, escalation)
+│   ├── connectors/
+│   │   ├── types.ts            # External-system client interfaces (the mock/real seam)
+│   │   └── mock.ts             # Fixture-backed mocks simulating outbound requests
 │   ├── engine/
 │   │   ├── worker.ts           # Queue polling and execution worker loop
 │   │   └── reaper.ts           # Stale lock recovery background task
@@ -447,14 +446,119 @@ deno run \
 
 ---
 
-## 10. Future Direction: Per-Customer Memory (B2B)
+## 10. Per-Customer Memory & Self-Learning (M7 design)
 
-Flywheel serves **B2B support**: a "customer" is a business account, and effective support requires accumulating knowledge about each customer's setup, history, and recurring issues. Memory itself is a later phase, but the architecture reserves for it now:
+Flywheel serves **B2B support**: a "customer" is a business account, and effective support requires accumulating knowledge about each customer's setup, history, and recurring issues — and learning from human resolutions so escalation rates fall over time. This section is the binding design for milestone M7.
 
-1. **First-class customer identity.** Every customer message carries the external platform's stable account ID in `customer_id` (Section 3.2), and the engine propagates it end-to-end: ingest → message row → assistant reply row → agent run input → tools → any future memory store. `idx_messages_customer` already supports per-customer queries.
-2. **Hard isolation between customers.** All future memory is keyed by `customer_id` and scoped to it on every read and write. The agent's context for a thread may only ever contain that thread's history plus memory belonging to that thread's `customer_id` — nothing cross-customer, ever. This is the same rule the Section 6.1 authorization already applies to tool lookups.
-3. **Identity is issued externally.** `customer_id` originates in the external ticketing platform, which is responsible for verifying it. The engine never invents, infers, or accepts one from message text. Messages without a `customer_id` get no memory reads or writes.
-4. **Likely shape (non-binding):** a `memories` table keyed by `(customer_id, key)`, maintained by the agent through a dedicated tool and hydrated into the system prompt per run — to be specified in its own milestone.
+### 10.1. Principles
+
+1. **First-class customer identity.** Every memory operation is keyed by the verified `customer_id` propagated since ingest (Section 3.2). Messages without a `customer_id` get no memory reads or writes.
+2. **Hard isolation.** The agent's context for a thread may only ever contain that thread's history plus memory belonging to that thread's `customer_id` — plus the **shared knowledge layer** (Section 10.7), which is customer-free by construction. Cross-customer learning never happens implicitly: it exists only as the explicit, gated promotion pipeline of Section 10.7, delivered separately as M8.
+3. **Memory holds durable facts and narrative; tools hold current state.** "Runs 2.9.4" belongs to the deployment connector (it goes stale); "their 3.x upgrade is blocked until their PostgreSQL migration lands" belongs in memory.
+4. **The `messages` table stays the sole queue/conversation store.** Memory is a second, purpose-separate table — an amendment to the single-table premise, not an erosion of the queue design.
+
+### 10.2. Schema
+
+```sql
+CREATE TABLE IF NOT EXISTS memories (
+    id TEXT PRIMARY KEY,                 -- mem_<uuid>
+    customer_id TEXT NOT NULL,           -- hard isolation key
+    kind TEXT NOT NULL,                  -- 'fact' | 'episode' | 'playbook'
+    content TEXT NOT NULL,               -- one concise fact / summary / symptom→fix
+    provenance TEXT NOT NULL,            -- 'customer_stated' | 'agent_inferred' | 'ticket_summary' | 'human_resolution'
+    source_thread_id TEXT,               -- ticket that produced it
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    expires_at INTEGER,                  -- optional decay
+    superseded_by TEXT,                  -- correction chain; superseded rows never hydrate
+    archived_at INTEGER                  -- soft-forget (audit-preserving)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memories_active
+ON memories(customer_id, kind, updated_at DESC)
+WHERE archived_at IS NULL AND superseded_by IS NULL;
+
+-- One episode summary per ticket (summarizer idempotency)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_episode_once
+ON memories(source_thread_id)
+WHERE kind = 'episode';
+```
+
+**Kinds.** `fact`: durable customer facts — setup quirks, constraints, contacts, preferences (curated, updatable via supersede). `episode`: one per closed ticket — issue, resolution, outcome. `playbook`: learned symptom→fix for this customer, primarily distilled from human resolutions.
+
+### 10.3. Write paths
+
+1. **Agent tools** during a run: `save_memory(kind, content, supersedes?)` and `archive_memory(id)`. The harness forces `provenance='customer_stated'` for anything derived from customer text and `agent_inferred` otherwise; the model cannot choose provenance.
+2. **End-of-ticket summarizer** (background job, like the reaper): threads whose messages are all terminal and idle longer than `SUMMARIZE_AFTER_MS` (default 24h) get one `episode` memory, written via the LLM with a cheap summarization prompt. The unique index makes the sweep idempotent.
+3. **Human-resolution feedback** (the self-learning loop): the external platform MAY insert `role='system', status='completed'` rows with `metadata.type='human_resolution'` carrying how a human resolved an escalated ticket (Section 3.2 extension; `status='completed'` keeps them unclaimable). The summarizer distills these into `playbook` memories — the next occurrence of the same symptom is handled without escalation.
+
+### 10.4. Read path
+
+Per run, the harness hydrates the customer's active memories into the system prompt: facts and playbooks first, then recent episodes; capped by count and token budget (`MEMORY_HYDRATION_BUDGET`). Every entry is rendered **with provenance and date** — customer-stated items read as claims (`[claimed by customer, 2026-07-12] …`), never as established fact. Ranking v1 is kind-priority + recency (no embeddings; semantic retrieval is a later upgrade behind the same interface).
+
+### 10.5. Poisoning & abuse resistance
+
+- Provenance is mandatory and system-assigned; hydration renders claims as claims.
+- The system prompt treats memories as background data, never as instructions — same stance as customer messages.
+- Entitlement, billing, and policy assertions never become `fact`s; they persist only as customer-stated claims, and the agent is instructed not to act on unverified claims.
+- Write caps bound poisoning velocity: per-run memory writes (default 3) and per-customer active memories (default 200, oldest-archived-first).
+- Every write is logged (`memory_saved`, `memory_archived`) and auditable in the dev harness's Memory view.
+
+### 10.6. Retention & erasure
+
+Memories are per-customer PII aggregation: the erasure operation `DELETE FROM memories WHERE customer_id = ?` (hard delete, including archived rows) is part of the operational contract, alongside the existing per-customer message queries via `idx_messages_customer`. Optional `expires_at` decay applies to episodes by default.
+
+### 10.7. Shared Knowledge Layer (M8 design)
+
+The second memory layer: product knowledge relevant across all customers — quirks not yet in the docs, symptom→fix patterns, workarounds. Its safety comes from **asymmetry with the customer layer**:
+
+| | Customer layer (M7) | Shared layer (M8) |
+|---|---|---|
+| Agent runs | read **and** write | **read-only** |
+| Keyed by | `customer_id` | **no customer identity column exists** |
+| Content enters via | tools + summarizer | a gated **promotion pipeline** |
+
+```sql
+CREATE TABLE IF NOT EXISTS shared_knowledge (
+    id TEXT PRIMARY KEY,                 -- gk_<uuid>
+    category TEXT NOT NULL,              -- 'product_quirk' | 'symptom_fix' | 'workaround' | 'process'
+    content TEXT NOT NULL,               -- anonymized, generalized statement
+    status TEXT NOT NULL,                -- 'proposed' | 'active' | 'rejected' | 'archived'
+    proposed_at INTEGER NOT NULL,
+    reviewed_at INTEGER,
+    reviewed_by TEXT,                    -- human reviewer (from the review UI)
+    review_note TEXT,
+    superseded_by TEXT
+    -- deliberately NO customer_id column: identity cannot be stored here
+);
+
+CREATE INDEX IF NOT EXISTS idx_shared_knowledge_active
+ON shared_knowledge(category, reviewed_at DESC)
+WHERE status = 'active';
+
+-- Audit-only lineage (k-counts, erasure reports). NEVER read during hydration.
+CREATE TABLE IF NOT EXISTS shared_knowledge_sources (
+    knowledge_id TEXT NOT NULL,
+    customer_id TEXT NOT NULL,
+    thread_id TEXT,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (knowledge_id, customer_id)
+);
+```
+
+**Promotion pipeline** — a candidate must pass every stage to become `active`:
+
+1. **Nomination.** An agent run (or the M7 summarizer) proposes a generalizable observation via `propose_shared_knowledge(category, content)`. Only `agent_inferred` and `human_resolution` material is eligible — raw `customer_stated` claims are never nominatable. The proposal lands as `status='proposed'`; the run's `customer_id` goes into the *sources* side table only.
+2. **Anonymization rewrite (automated).** A dedicated LLM pass rewrites the candidate to strip identity and generalize specifics ("PostgreSQL 13 blocks the 3.x upgrade" survives; "their Frankfurt cluster" does not), with a structured self-check; candidates it cannot generalize are auto-rejected.
+3. **Deterministic identity screen.** The candidate text is mechanically screened against the CRM directory — every known company name, contact name, email, and customer id (via `CrmConnector.listCustomers()`/profiles) — plus generic PII patterns. Any hit → auto-rejected. This screen is code, not model judgment.
+4. **Human review (default gate).** Surviving candidates appear in a review queue in the dev harness; a person approves or rejects with a note. This is deliberate: the shared layer is the org's institutional knowledge base, and B2B teams want editorial control over it anyway.
+5. **k-source threshold (optional hardening).** `SHARED_KNOWLEDGE_MIN_SOURCES` may require the same pattern to have been observed for ≥k distinct customers before it is even shown for review — knowledge true of many customers identifies none. Default 1 (the human gate carries the judgment).
+
+**Read path.** Hydrated read-only into every run under a separate prompt section ("Product knowledge — applies to all customers"), small token budget, no source attribution ever rendered. Prompt rules already treat it as background data, not instructions.
+
+**Erasure interplay.** Erasing customer X deletes their rows from `shared_knowledge_sources`; active knowledge whose *only* source was X is flagged in the erasure report for operator re-review. The content itself contains no identity by construction of stages 2–3.
+
+**The guarantee, stated honestly.** Identity leakage is prevented **structurally**: the hydrated table cannot hold a customer identity, and lineage lives in a side table no read path touches. Content-level leakage (a sentence that indirectly identifies an account) is prevented by **defense in depth** — anonymizer, deterministic directory screen, human gate, optional k-threshold — which is a process guarantee, not a mathematical one; the human reviewer owns the final judgment, exactly as with a hand-curated KB. Cross-tenant *integrity* (customer A poisoning advice given to customer B) is covered by the nomination eligibility rule plus the same human gate.
 
 ---
 

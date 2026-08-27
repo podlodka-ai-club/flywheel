@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { config } from "../../src/config.ts";
 import { configureLogging, logger } from "../../src/logger/index.ts";
 import { openDb } from "../../src/db/client.ts";
+import { createMockConnectors } from "../../src/connectors/mock.ts";
 import {
   acknowledgeFailed,
   getMessage,
@@ -19,6 +20,7 @@ import {
 
 configureLogging({ name: "dev-ui" });
 const db = openDb(config.databasePath);
+const connectors = createMockConnectors();
 const INDEX_HTML_URL = new URL("./index.html", import.meta.url);
 
 function json(body: unknown, status = 200): Response {
@@ -227,6 +229,11 @@ async function handler(req: Request): Promise<Response> {
   }
   if (req.method === "GET" && pathname === "/api/failed") {
     return json(listUnacknowledgedFailed(db));
+  }
+  if (req.method === "GET" && pathname === "/api/customers") {
+    // Composer identity picker: the customer directory from the CRM connector.
+    const customers = await connectors.crm.listCustomers();
+    return json(customers.map((c) => ({ id: c.customerId, company: c.company, plan: c.plan })));
   }
   const failedAckMatch = pathname.match(/^\/api\/messages\/([^/]+)\/failed_ack$/);
   if (req.method === "POST" && failedAckMatch) {

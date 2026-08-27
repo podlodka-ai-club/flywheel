@@ -5,8 +5,11 @@ import type { Api, AssistantMessage, Model, Models } from "@earendil-works/pi-ai
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { logger } from "../logger/index.ts";
 import type { MessageRecord } from "../db/messages.ts";
+import { createMockConnectors } from "../connectors/mock.ts";
+import type { Connectors } from "../connectors/types.ts";
 import { buildPromptMessages, hydrateThreadHistory } from "./hydrator.ts";
 import { buildSystemPrompt } from "./prompt.ts";
+import { buildSupportTools, type ToolRunContext } from "./tools/index.ts";
 
 export interface AgentReply {
   content: string;
@@ -160,6 +163,8 @@ export interface LlmHarnessOptions extends LlmSetup {
   models?: Models;
   model?: Model<Api>;
   streamFn?: StreamFn;
+  /** External-system clients; defaults to the fixture-backed mocks. */
+  connectors?: Connectors;
 }
 
 /**
@@ -173,6 +178,7 @@ class LlmHarness implements AgentHarness {
   private readonly models: Models;
   private readonly model: Model<Api>;
   private readonly streamFn: StreamFn;
+  private readonly connectors: Connectors;
   /** Mutable: bumped and memoized when the provider rejects the level. */
   private thinkingLevel: ThinkingLevel;
 
@@ -210,6 +216,7 @@ class LlmHarness implements AgentHarness {
     }
     this.streamFn = options.streamFn ??
       ((m, context, streamOptions) => this.models.streamSimple(m, context, streamOptions));
+    this.connectors = options.connectors ?? createMockConnectors();
   }
 
   /** Lowest supported reasoning level strictly above the current one. */
@@ -246,12 +253,18 @@ class LlmHarness implements AgentHarness {
   private async runOnce(
     input: AgentRunInput,
   ): Promise<{ ok: true; reply: AgentReply } | { ok: false; error: string }> {
+    const toolContext: ToolRunContext = {
+      threadId: input.threadId,
+      customerId: input.customerId,
+      connectors: this.connectors,
+      escalation: { escalated: false },
+    };
     const agent = new Agent({
       initialState: {
         systemPrompt: buildSystemPrompt({ threadId: input.threadId, customerId: input.customerId }),
         model: this.model,
         thinkingLevel: this.thinkingLevel,
-        tools: [],
+        tools: buildSupportTools(toolContext),
         messages: hydrateThreadHistory(input.history),
       },
       streamFn: this.streamFn,
@@ -293,6 +306,11 @@ class LlmHarness implements AgentHarness {
         tokensIn: reply.usage.input,
         tokensOut: reply.usage.output,
         costUsd: reply.usage.cost.total,
+        // Escalation contract (spec §3.2/§6.1): structured flag for the
+        // dispatcher; the reply text itself stays customer-safe.
+        metadata: toolContext.escalation.escalated
+          ? { escalated: true, escalation_reason: toolContext.escalation.reason ?? "unspecified" }
+          : null,
       },
     };
   }

@@ -1,0 +1,83 @@
+import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
+import { createMockConnectors } from "../src/connectors/mock.ts";
+import { buildSupportTools, type ToolRunContext } from "../src/agent/tools/index.ts";
+
+function makeContext(customerId: string | null): ToolRunContext {
+  return {
+    threadId: "tkt_1",
+    customerId,
+    connectors: createMockConnectors(),
+    escalation: { escalated: false },
+  };
+}
+
+function tool(context: ToolRunContext, name: string) {
+  const found = buildSupportTools(context).find((t) => t.name === name);
+  assert(found !== undefined, `tool ${name} missing`);
+  return found;
+}
+
+function resultText(result: { content: { type: string; text?: string }[] }): string {
+  return result.content.filter((b) => b.type === "text").map((b) => b.text ?? "").join("\n");
+}
+
+Deno.test("search_knowledge_base returns relevant fixture articles", async () => {
+  const context = makeContext("google");
+  const result = await tool(context, "search_knowledge_base")
+    .execute("tc1", { query: "export data to csv" }, undefined, undefined);
+  const text = resultText(result);
+  assertStringIncludes(text, "Exporting data to CSV");
+  assertStringIncludes(text, "kb-101");
+  // deno-lint-ignore no-explicit-any
+  assert((result.details as any).resultCount >= 1);
+});
+
+Deno.test("search_knowledge_base admits when nothing matches", async () => {
+  const context = makeContext("google");
+  const result = await tool(context, "search_knowledge_base")
+    .execute("tc1", { query: "quantum blockchain espresso" }, undefined, undefined);
+  assertStringIncludes(resultText(result), "No documentation articles matched");
+});
+
+Deno.test("customer-scoped tools are bound to the verified identity and take no id argument", async () => {
+  const context = makeContext("facebook");
+  for (const name of ["lookup_customer_account", "lookup_customer_setup"]) {
+    const t = tool(context, name);
+    // The scoping property: the schema exposes NO way to name another account.
+    assertEquals(Object.keys((t.parameters as { properties?: object }).properties ?? {}), []);
+  }
+
+  const account = await tool(context, "lookup_customer_account")
+    .execute("tc1", {}, undefined, undefined);
+  assertStringIncludes(resultText(account), "Facebook Inc.");
+
+  const setup = await tool(context, "lookup_customer_setup")
+    .execute("tc2", {}, undefined, undefined);
+  const setupText = resultText(setup);
+  assertStringIncludes(setupText, "2.9.4");
+  assertStringIncludes(setupText, "PostgreSQL");
+});
+
+Deno.test("customer-scoped tools fail without a verified identity or CRM record", async () => {
+  const anonymous = makeContext(null);
+  await assertRejects(
+    () => tool(anonymous, "lookup_customer_account").execute("tc1", {}, undefined, undefined),
+    Error,
+    "no verified customer identity",
+  );
+
+  const unknown = makeContext("cust_does_not_exist");
+  await assertRejects(
+    () => tool(unknown, "lookup_customer_setup").execute("tc1", {}, undefined, undefined),
+    Error,
+    "No deployment record",
+  );
+});
+
+Deno.test("escalate_to_human records the escalation on the run context", async () => {
+  const context = makeContext("google");
+  const result = await tool(context, "escalate_to_human")
+    .execute("tc1", { reason: "customer requests refund" }, undefined, undefined);
+  assertEquals(context.escalation, { escalated: true, reason: "customer requests refund" });
+  assertStringIncludes(resultText(result), "specialist will follow up");
+});

@@ -6,7 +6,7 @@ function msg(id: string, content: string): MessageRecord {
   return {
     id,
     threadId: "t1",
-    customerId: "cust_1",
+    customerId: "google",
     role: "customer",
     content,
     status: "processing",
@@ -30,7 +30,7 @@ Deno.test("echo consolidates anchor + follow-ups into one reply", async () => {
   const harness = createHarness("echo");
   const reply = await harness.run({
     threadId: "t1",
-    customerId: "cust_1",
+    customerId: "google",
     message: msg("m1", "first"),
     history: [],
     followUps: [msg("m2", "second"), msg("m3", "third")],
@@ -43,7 +43,7 @@ Deno.test("fault markers are inert without devFaults", async () => {
   const harness = createHarness("echo");
   const reply = await harness.run({
     threadId: "t1",
-    customerId: "cust_1",
+    customerId: "google",
     message: msg("m1", "[[fail]] should not throw"),
     history: [],
   });
@@ -54,7 +54,7 @@ Deno.test("devFaults: [[fail]] throws, [[sleep:ms]] delays", async () => {
   const harness = createHarness("echo", { devFaults: true });
 
   await assertRejects(
-    () => harness.run({ threadId: "t1", customerId: "cust_1", message: msg("m1", "[[fail]] boom"), history: [] }),
+    () => harness.run({ threadId: "t1", customerId: "google", message: msg("m1", "[[fail]] boom"), history: [] }),
     Error,
     "[[fail]] marker",
   );
@@ -62,7 +62,7 @@ Deno.test("devFaults: [[fail]] throws, [[sleep:ms]] delays", async () => {
   const started = Date.now();
   const reply = await harness.run({
     threadId: "t1",
-    customerId: "cust_1",
+    customerId: "google",
     message: msg("m1", "[[sleep:120]] hello"),
     history: [],
   });
@@ -75,11 +75,11 @@ Deno.test("devFaults: [[sleep_once:ms]] delays only the first attempt", async ()
 
   const first = msg("m1", "[[sleep_once:120]] hello");
   let started = Date.now();
-  await harness.run({ threadId: "t1", customerId: "cust_1", message: first, history: [] });
+  await harness.run({ threadId: "t1", customerId: "google", message: first, history: [] });
   assert(Date.now() - started >= 100, "first attempt should sleep");
 
   const retry = { ...first, attemptCount: 2 };
   started = Date.now();
-  await harness.run({ threadId: "t1", customerId: "cust_1", message: retry, history: [] });
+  await harness.run({ threadId: "t1", customerId: "google", message: retry, history: [] });
   assert(Date.now() - started < 80, "retry must not sleep");
 });

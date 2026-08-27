@@ -262,8 +262,9 @@
       <form id="composer">
         <div class="row">
           <div>
-            <label for="customerId">customer id (metadata)</label>
-            <input id="customerId" value="cust_1" spellcheck="false">
+            <label for="customerId">verified customer</label>
+            <input id="customerId" placeholder="loading directory…" spellcheck="false" list="customerOptions" title="Simulates the verified customer identity the external platform attaches at ingest">
+            <datalist id="customerOptions"></datalist>
           </div>
           <div style="flex:1">
             <label for="externalId">external message id (optional — reuse one to test webhook-redelivery dedup)</label>
@@ -533,6 +534,14 @@ function renderMessages() {
       foot.appendChild(btn);
     }
     if (m.role === "assistant") {
+      if (m.metadata && m.metadata.escalated) {
+        const esc = document.createElement("span");
+        esc.className = "chip failed";
+        esc.textContent = "⚠ escalated";
+        esc.title = "metadata.escalated = true — the platform assigns a human and mutes the thread (spec §3.2). Reason: " +
+          (m.metadata.escalation_reason || "unspecified");
+        head.appendChild(esc);
+      }
       if (m.model) {
         const telemetry = document.createElement("span");
         telemetry.className = "mono";
@@ -1000,6 +1009,20 @@ $("content").addEventListener("keydown", (e) => {
     $("composer").requestSubmit();
   }
 });
+
+api("/api/customers").then((customers) => {
+  const list = $("customerOptions");
+  for (const c of customers) {
+    const option = document.createElement("option");
+    option.value = c.id;
+    option.label = c.company + " (" + c.plan + ")";
+    list.appendChild(option);
+  }
+  const input = $("customerId");
+  input.placeholder = "customer id";
+  // Default identity = first directory entry, unless the user already typed one.
+  if (input.value.trim() === "" && customers.length > 0) input.value = customers[0].id;
+}).catch(() => { $("customerId").placeholder = "customer id (directory unavailable)"; });
 
 setInterval(refresh, 1000);
 refresh();

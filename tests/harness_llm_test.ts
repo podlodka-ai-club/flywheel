@@ -226,6 +226,49 @@ Deno.test("llm harness throws on provider error so the worker retry path engages
   );
 });
 
+Deno.test("tool loop e2e: escalation flag lands on reply metadata; KB result reaches the model", async () => {
+  const { fauxToolCall } = await import("@earendil-works/pi-ai");
+  const faux = fauxProvider();
+  const models = createModels();
+  models.setProvider(faux.provider);
+
+  let toolResultSeen = "";
+  faux.setResponses([
+    // Turn 1: the model searches the docs, then escalates.
+    fauxAssistantMessage([
+      fauxToolCall("search_knowledge_base", { query: "csv export" }),
+      fauxToolCall("escalate_to_human", { reason: "billing action required" }),
+    ], { stopReason: "toolUse" }),
+    // Turn 2: sees the tool results, writes the customer-facing reply.
+    (context: Context) => {
+      const toolResults = context.messages.filter((m) => m.role === "toolResult");
+      toolResultSeen = JSON.stringify(toolResults.map((m) =>
+        m.content.map((b) => (b.type === "text" ? b.text : "")).join("")
+      ));
+      return fauxAssistantMessage("A specialist will follow up shortly about your billing question.");
+    },
+  ]);
+
+  const harness = createLlmHarness({
+    provider: faux.provider.id,
+    modelId: faux.getModel().id,
+    apiKey: "test-key",
+    models,
+    model: faux.getModel(),
+  });
+  const reply = await harness.run({
+    threadId: "tkt_1",
+    customerId: "google",
+    message: record("m1", "customer", "I was double charged, need a refund", 1000),
+    history: [],
+  });
+
+  assertEquals(reply.content, "A specialist will follow up shortly about your billing question.");
+  assertEquals(reply.metadata, { escalated: true, escalation_reason: "billing action required" });
+  // The KB article text made it into the tool results the model saw.
+  assertStringIncludes(toolResultSeen, "Exporting data to CSV");
+});
+
 Deno.test("hydrateThreadHistory maps roles and preserves order/timestamps", () => {
   const messages = hydrateThreadHistory([
     record("c1", "customer", "first", 1000),
