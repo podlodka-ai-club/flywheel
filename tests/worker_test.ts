@@ -1,3 +1,10 @@
+/**
+ * Tests for the worker pool (src/engine/worker.ts) with scripted harnesses:
+ * the claim → process → fenced-completion pipeline end to end, mid-run
+ * follow-ups coalescing into one consolidated reply via a gated first run,
+ * and a persistently failing agent retrying then landing on terminal
+ * 'failed' with no reply row.
+ */
 import { assert, assertEquals } from "@std/assert";
 import { join } from "node:path";
 import { createHarness } from "../src/agent/harness.ts";

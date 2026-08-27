@@ -1,3 +1,12 @@
+/**
+ * Queue mechanics over the messages table (spec §4): the atomic claim query
+ * (per-thread FIFO), follow-up coalescing claims, zombie-lease reaping, and
+ * fenced completion — one fully synchronous transaction that completes the
+ * claimed rows and inserts the reply only if this worker still owns the
+ * lease, with UNIQUE(in_reply_to) as the backstop guaranteeing at most one
+ * delivered reply per customer message. Fenced release/fail round out the
+ * retryable and terminal error paths.
+ */
 import type { DatabaseSync } from "node:sqlite";
 import { type MessageRecord, rowToRecord } from "./messages.ts";
 

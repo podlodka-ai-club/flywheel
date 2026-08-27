@@ -1,3 +1,10 @@
+/**
+ * Tests for the per-customer memory store (src/memory/store.ts): strict
+ * customer isolation, supersede chains with cross-customer fencing, the
+ * active cap and expiry, hard-delete erasure, prompt rendering (kind
+ * ordering, provenance labels, token budget), and the run-scoped
+ * MemoryAccess with forced 'customer_stated' provenance and the write cap.
+ */
 import { assert, assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
 import { join } from "node:path";
 import { openDb } from "../src/db/client.ts";

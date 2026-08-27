@@ -1,3 +1,10 @@
+/**
+ * The lookup_customer_setup support tool (spec §6.1): fetches what the
+ * verified customer actually runs (product edition, version, environment,
+ * config, dependency versions, known issues) from the deployment-telemetry
+ * connector, for version-aware answers. Takes NO id parameter — hard-bound
+ * to the ticket's verified customer, same security model as the CRM lookup.
+ */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 import { requireCustomer, textResult, type ToolRunContext } from "./context.ts";

@@ -1,3 +1,10 @@
+/**
+ * The reaper — the engine's zombie-recovery loop (spec §4.2). Periodically
+ * scans for expired processing leases (crashed or stalled workers) and
+ * either returns them to 'pending' for retry or marks them terminally
+ * 'failed' once retries are exhausted, logging each transition. Started by
+ * the engine alongside the worker pool; stop() ends the loop cleanly.
+ */
 import type { DatabaseSync } from "node:sqlite";
 import { reapExpiredLeases } from "../db/queue.ts";
 import { logger } from "../logger/index.ts";

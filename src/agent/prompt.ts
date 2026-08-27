@@ -1,3 +1,10 @@
+/**
+ * System-prompt builder for the B2B support agent (spec §5/§6):
+ * buildSystemPrompt() assembles the DataBridge support persona, the ticket
+ * context (thread id + verified customer), the rendered per-customer memory
+ * section, per-tool usage guidance, and the grounding / scoping /
+ * anti-injection rules the agent must follow.
+ */
 export interface PromptContext {
   threadId: string;
   customerId: string | null;

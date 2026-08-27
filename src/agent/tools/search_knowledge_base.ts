@@ -1,3 +1,10 @@
+/**
+ * The search_knowledge_base support tool (spec §6): searches the product
+ * documentation through the knowledge-base connector and returns the top
+ * matching articles for grounding answers. An empty result returns an
+ * explicit "don't guess" instruction instead, so the agent admits gaps or
+ * escalates rather than inventing facts.
+ */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 import { textResult, type ToolRunContext } from "./context.ts";

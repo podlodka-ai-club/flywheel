@@ -1,3 +1,10 @@
+/**
+ * The escalate_to_human support tool (spec §6.1): hands the ticket to a human
+ * colleague via the TicketingConnector.escalateTicket outbound call, requires
+ * an accepted ack, and records reason + platform reference on the run's
+ * EscalationState — which the harness copies onto the reply row's metadata
+ * for the dispatcher. The reply text itself stays customer-safe.
+ */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 import { textResult, type ToolRunContext } from "./context.ts";

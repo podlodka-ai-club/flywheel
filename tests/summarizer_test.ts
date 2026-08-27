@@ -1,3 +1,10 @@
+/**
+ * Tests for the end-of-ticket summarizer (src/memory/summarizer.ts):
+ * candidate selection (terminal, idle, verified-customer threads only),
+ * exactly-one-episode idempotency across sweeps, episode decay, and the
+ * self-learning loop distilling human-resolution notes into persistent
+ * playbooks.
+ */
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { join } from "node:path";
 import { openDb } from "../src/db/client.ts";

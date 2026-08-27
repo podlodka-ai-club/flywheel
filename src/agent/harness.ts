@@ -1,3 +1,13 @@
+/**
+ * Agent harnesses — the seam between the queue engine and reply generation.
+ * Defines the AgentHarness contract (AgentRunInput → AgentReply) and both
+ * implementations: EchoHarness (deterministic key-free testing, optional
+ * fault markers) and LlmHarness (the real pi-agent-core loop with system
+ * prompt, hydrated history, support tools, per-customer memory, and
+ * escalation metadata on replies). Also resolves/validates the LLM provider
+ * setup at startup and owns thinking-level clamping plus the runtime
+ * "reasoning is mandatory" bump shared with the summarizer.
+ */
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { StreamFn, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";

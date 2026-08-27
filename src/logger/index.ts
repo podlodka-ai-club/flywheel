@@ -1,3 +1,10 @@
+/**
+ * Structured logging (spec §7): every event is one JSON line, identical on
+ * stdout and the rotating per-process log file (engine.log, dev-ui.log).
+ * Exports the `logger` used across the codebase plus configureLogging() /
+ * teardownLogging() to attach and detach the file sink; processes that never
+ * configure (tests) stay console-only and never touch the filesystem.
+ */
 import * as log from "@std/log";
 import { join } from "node:path";
 import { config } from "../config.ts";

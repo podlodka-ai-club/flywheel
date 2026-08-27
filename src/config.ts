@@ -1,3 +1,11 @@
+/**
+ * Configuration component: the Config shape, typed env-var parsers with
+ * validation, and loadConfig(), which resolves every setting (with defaults)
+ * into the `config` singleton read at import time by every process. Adding a
+ * variable here means adding it to the enumerated --allow-env lists of the
+ * db:init / dev:ui tasks in deno.json, or those harnesses fail at import
+ * with NotCapable.
+ */
 export interface Config {
   databasePath: string;
   lockTimeoutMs: number;

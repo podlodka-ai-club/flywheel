@@ -1,3 +1,11 @@
+/**
+ * Thread hydration (spec §5.1): converts stored message rows into the
+ * agent's conversation-turn format. hydrateThreadHistory() maps a thread's
+ * completed rows to prior turns (customer → user, assistant synthesized
+ * provider-agnostically, human-resolution notes as marked internal context);
+ * buildPromptMessages() shapes the claimed anchor + coalesced follow-ups
+ * into the user turns for the current run.
+ */
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { MessageRecord } from "../db/messages.ts";

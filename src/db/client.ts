@@ -1,3 +1,10 @@
+/**
+ * SQLite client: openDb() opens (or creates) the database via the built-in
+ * node:sqlite DatabaseSync, runs the additive migrate() step for databases
+ * created by earlier schema versions, and applies the idempotent schema.sql
+ * (PRAGMAs, WAL, tables, indexes). Also runnable directly as the `db:init`
+ * task, which initializes the file and logs the resulting journal mode.
+ */
 import { DatabaseSync } from "node:sqlite";
 import { dirname } from "node:path";
 

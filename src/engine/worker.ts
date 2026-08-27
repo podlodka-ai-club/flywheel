@@ -1,3 +1,11 @@
+/**
+ * The worker pool — the engine's core processing loop (spec §4). N concurrent
+ * pollers claim pending customer messages, hydrate the thread's completed
+ * history and (for verified customers) per-customer memory, run the agent
+ * harness, fold in follow-ups that arrived mid-run via the pre-commit
+ * freshness check so one consolidated reply covers everything, and finish
+ * with fenced completion — or the fenced release/fail paths on errors.
+ */
 import type { DatabaseSync } from "node:sqlite";
 import type { AgentHarness } from "../agent/harness.ts";
 import { getCompletedThreadHistory, type MessageRecord } from "../db/messages.ts";

@@ -1,3 +1,9 @@
+/**
+ * Tests for the echo harness (src/agent/harness.ts): anchor + follow-up
+ * consolidation into one reply, and the DEV_FAULTS markers — [[fail]],
+ * [[sleep:ms]], first-attempt-only [[sleep_once:ms]], and their inertness
+ * when devFaults is off.
+ */
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { createHarness } from "../src/agent/harness.ts";
 import type { MessageRecord } from "../src/db/messages.ts";

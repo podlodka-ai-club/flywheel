@@ -1,3 +1,9 @@
+/**
+ * Tests for the LLM thread summarizer (src/memory/summarize_llm.ts) via the
+ * faux provider: parsing model responses that fence the JSON in markdown or
+ * wrap it in prose, and throwing on JSON-free output so the summarizer sweep
+ * retries the thread later.
+ */
 import { assertEquals, assertRejects } from "@std/assert";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { createLlmThreadSummarizer } from "../src/memory/summarize_llm.ts";

@@ -1,3 +1,12 @@
+/**
+ * Data access for the `messages` table — the sole queue/conversation store
+ * and the integration contract with the external ticketing platform (spec
+ * §3.2). Contains the MessageRecord row mapping plus the contract's
+ * operations: deduplicated customer ingest, thread reads and the hydration
+ * source, platform-inserted system rows, the dispatcher's delivery stamp,
+ * the failure poll/ack, and the dev-harness thread listing and deletion.
+ * (Claiming/completion mechanics live in queue.ts.)
+ */
 import type { DatabaseSync } from "node:sqlite";
 
 export type Role = "customer" | "assistant" | "system";

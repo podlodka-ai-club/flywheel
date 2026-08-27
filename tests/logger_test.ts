@@ -1,3 +1,9 @@
+/**
+ * Tests for the logger (src/logger/index.ts): the file sink writes
+ * spec-shaped single-line JSON entries, rotates by size into numbered
+ * backups, and detaches cleanly on teardown while console logging keeps
+ * working.
+ */
 import { assert, assertEquals } from "@std/assert";
 import { join } from "node:path";
 import { configureLogging, logger, teardownLogging } from "../src/logger/index.ts";

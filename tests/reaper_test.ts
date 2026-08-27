@@ -1,3 +1,10 @@
+/**
+ * Tests for zombie-lease recovery (src/db/queue.ts reapExpiredLeases and the
+ * src/engine/reaper.ts loop): stale leases with retries left return to
+ * 'pending', exhausted ones fail terminally, and the live reaped-while-alive
+ * race — a slow worker reaped mid-run while a second one reprocesses — still
+ * commits exactly one reply thanks to the completion fence.
+ */
 import { assert, assertEquals } from "@std/assert";
 import { join } from "node:path";
 import type { AgentHarness } from "../src/agent/harness.ts";

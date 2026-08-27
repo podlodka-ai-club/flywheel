@@ -1,3 +1,8 @@
+/**
+ * Tests for the dev-harness .env parser (tools/ui/env_file.ts): the common
+ * dotenv subset — comments, `export ` prefixes, quoting, inline comments,
+ * duplicate keys, invalid keys, CRLF endings, and empty input.
+ */
 import { assertEquals } from "@std/assert";
 import { parseEnvFile } from "../tools/ui/env_file.ts";
 

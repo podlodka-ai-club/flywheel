@@ -1,3 +1,11 @@
+/**
+ * Tests for the queue mechanics (src/db/queue.ts): oldest-first claiming,
+ * per-thread serialization, no double-claims under interleaved workers,
+ * atomic completion of customer row + reply, the ownership fence and the
+ * UNIQUE(in_reply_to) backstop against duplicate replies, follow-up claiming,
+ * all-or-nothing completion with coalesced extras, and ownership-fenced
+ * release/fail.
+ */
 import { assert, assertEquals } from "@std/assert";
 import { join } from "node:path";
 import { openDb } from "../src/db/client.ts";

@@ -1,3 +1,12 @@
+/**
+ * Tests for the LLM harness and hydrator (src/agent/harness.ts,
+ * src/agent/hydrator.ts) using pi-ai's network-free faux provider: reply and
+ * telemetry mapping, hydrated history + follow-ups + system prompt assembly,
+ * thinking-level clamping and the "reasoning is mandatory" auto-bump with
+ * memoization, provider-error propagation to the worker retry path, the tool
+ * loop end to end (escalation metadata, KB results reaching the model), and
+ * the memory read/write paths through a real agent run.
+ */
 import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import type { Context } from "@earendil-works/pi-ai";

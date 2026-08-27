@@ -1,3 +1,10 @@
+/**
+ * Tests for the database client and messages table access (src/db/client.ts,
+ * src/db/messages.ts): schema application with WAL on open and idempotent
+ * re-open, ingest round-tripping every field, webhook-redelivery dedup via
+ * the external id, thread ordering, scoped thread deletion, and thread-list
+ * aggregation.
+ */
 import { assert, assertEquals } from "@std/assert";
 import { join } from "node:path";
 import { openDb } from "../src/db/client.ts";

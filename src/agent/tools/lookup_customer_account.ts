@@ -1,3 +1,10 @@
+/**
+ * The lookup_customer_account support tool (spec §6.1): fetches the verified
+ * customer's CRM profile (company, plan, seats, account manager, contract)
+ * through the CRM connector. Takes NO id parameter — it is hard-bound to the
+ * ticket's verified customer, which is the security model: message text can
+ * never point it at another account.
+ */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 import { requireCustomer, textResult, type ToolRunContext } from "./context.ts";

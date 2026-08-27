@@ -1,3 +1,10 @@
+/**
+ * Engine entrypoint (`deno task start`): the long-running process that turns
+ * pending customer messages into completed replies. Wires config, logging,
+ * the SQLite store, the agent harness (echo or LLM), the worker pool, the
+ * zombie-lease reaper, and the memory summarizer together, logs the resolved
+ * runtime settings, and shuts everything down gracefully on SIGINT/SIGTERM.
+ */
 import { config } from "./config.ts";
 import { configureLogging, logger, teardownLogging } from "./logger/index.ts";
 import { openDb } from "./db/client.ts";
