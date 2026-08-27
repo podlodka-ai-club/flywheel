@@ -110,6 +110,7 @@ Your testing loop: `deno task start` (engine) in one terminal, `deno task dev:ui
 **Configuration** (the `start` task auto-loads `.env`; put keys there, never in chat/commits):
 - `LLM_PROVIDER` — `openrouter` (default, uses `OPENROUTER_API_KEY`) or `google` (uses `GEMINI_API_KEY`); other pi-ai providers work via their conventional `<PROVIDER>_API_KEY`
 - `LLM_MODEL` — empty = provider default: `openai/gpt-4o-mini` on OpenRouter, `gemini-2.5-flash` on Google
+- `LLM_THINKING` — requested reasoning level, default `off`, auto-clamped to the model's catalog capabilities; when the live endpoint still rejects with "reasoning is mandatory" (catalog lag), the harness bumps a level, retries, and memoizes for the rest of the engine's lifetime
 - `AGENT_MODE` — now defaults to `llm`; `echo` remains for key-free testing (fault markers still echo-only)
 - Missing key → the engine fails fast at startup with the exact fix in the error message
 

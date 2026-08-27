@@ -1,7 +1,9 @@
 import { Agent } from "@earendil-works/pi-agent-core";
-import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { StreamFn, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { Api, AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { logger } from "../logger/index.ts";
 import type { MessageRecord } from "../db/messages.ts";
 import { buildPromptMessages, hydrateThreadHistory } from "./hydrator.ts";
 import { buildSystemPrompt } from "./prompt.ts";
@@ -117,6 +119,12 @@ export interface LlmSetup {
   provider: string;
   modelId: string;
   apiKey: string;
+  /**
+   * Requested reasoning level (LLM_THINKING, default "off"). The harness
+   * clamps it to what the model actually supports: reasoning-mandatory
+   * models raise "off" to their minimum, non-reasoning models force "off".
+   */
+  thinkingLevel?: ThinkingLevel;
 }
 
 /**
@@ -124,7 +132,7 @@ export interface LlmSetup {
  * errors at startup rather than at first message.
  */
 export function resolveLlmSetup(
-  input: { llmProvider: string; llmModel: string },
+  input: { llmProvider: string; llmModel: string; llmThinking?: ThinkingLevel },
 ): LlmSetup {
   const provider = input.llmProvider;
   const modelId = input.llmModel !== "" ? input.llmModel : DEFAULT_LLM_MODELS[provider];
@@ -144,7 +152,7 @@ export function resolveLlmSetup(
         `(${Object.keys(DEFAULT_LLM_MODELS).join(", ")}), or run without an LLM via AGENT_MODE=echo.`,
     );
   }
-  return { provider, modelId, apiKey };
+  return { provider, modelId, apiKey, thinkingLevel: input.llmThinking ?? "off" };
 }
 
 export interface LlmHarnessOptions extends LlmSetup {
@@ -165,6 +173,17 @@ class LlmHarness implements AgentHarness {
   private readonly models: Models;
   private readonly model: Model<Api>;
   private readonly streamFn: StreamFn;
+  /** Mutable: bumped and memoized when the provider rejects the level. */
+  private thinkingLevel: ThinkingLevel;
+
+  /**
+   * Provider rejections that mean "this endpoint requires a reasoning level",
+   * e.g. OpenRouter's "Reasoning is mandatory for this endpoint and cannot be
+   * disabled". The catalog metadata clampThinkingLevel relies on can lag the
+   * live endpoint, so this is the runtime backstop.
+   */
+  private static readonly REASONING_REQUIRED_ERROR =
+    /\breasoning\b.*?\b(mandatory|required|cannot be disabled|must be enabled)/is;
 
   constructor(private readonly options: LlmHarnessOptions) {
     this.models = options.models ?? builtinModels();
@@ -179,16 +198,59 @@ class LlmHarness implements AgentHarness {
       );
     }
     this.model = model;
+    const requested = options.thinkingLevel ?? "off";
+    this.thinkingLevel = clampThinkingLevel(model, requested);
+    if (this.thinkingLevel !== requested) {
+      logger.info("thinking_level_clamped", {
+        provider: options.provider,
+        modelId: options.modelId,
+        requested,
+        effective: this.thinkingLevel,
+      });
+    }
     this.streamFn = options.streamFn ??
       ((m, context, streamOptions) => this.models.streamSimple(m, context, streamOptions));
   }
 
+  /** Lowest supported reasoning level strictly above the current one. */
+  private nextThinkingLevel(): ThinkingLevel | null {
+    const order: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+    const supported = getSupportedThinkingLevels(this.model);
+    for (const level of order.slice(order.indexOf(this.thinkingLevel) + 1)) {
+      if (supported.includes(level)) return level;
+    }
+    return null;
+  }
+
   async run(input: AgentRunInput): Promise<AgentReply> {
+    // Bounded by the number of thinking levels: on a "reasoning is mandatory"
+    // rejection, bump one level, memoize, and retry the run.
+    for (;;) {
+      const result = await this.runOnce(input);
+      if (result.ok) return result.reply;
+      const bumpable = LlmHarness.REASONING_REQUIRED_ERROR.test(result.error)
+        ? this.nextThinkingLevel()
+        : null;
+      if (bumpable === null) throw new Error(result.error);
+      logger.warn("thinking_level_bumped", {
+        provider: this.options.provider,
+        modelId: this.options.modelId,
+        from: this.thinkingLevel,
+        to: bumpable,
+        providerError: result.error.slice(0, 200),
+      });
+      this.thinkingLevel = bumpable;
+    }
+  }
+
+  private async runOnce(
+    input: AgentRunInput,
+  ): Promise<{ ok: true; reply: AgentReply } | { ok: false; error: string }> {
     const agent = new Agent({
       initialState: {
         systemPrompt: buildSystemPrompt({ threadId: input.threadId, customerId: input.customerId }),
         model: this.model,
-        thinkingLevel: "off",
+        thinkingLevel: this.thinkingLevel,
         tools: [],
         messages: hydrateThreadHistory(input.history),
       },
@@ -207,10 +269,13 @@ class LlmHarness implements AgentHarness {
     const reply = [...agent.state.messages].reverse()
       .find((m): m is AssistantMessage => m.role === "assistant");
     if (reply === undefined) {
-      throw new Error(agent.state.errorMessage ?? "agent produced no assistant reply");
+      return { ok: false, error: agent.state.errorMessage ?? "agent produced no assistant reply" };
     }
     if (reply.stopReason === "error" || reply.stopReason === "aborted") {
-      throw new Error(reply.errorMessage ?? `LLM run ended with stopReason=${reply.stopReason}`);
+      return {
+        ok: false,
+        error: reply.errorMessage ?? `LLM run ended with stopReason=${reply.stopReason}`,
+      };
     }
     const text = reply.content
       .filter((block): block is Extract<typeof block, { type: "text" }> => block.type === "text")
@@ -218,14 +283,17 @@ class LlmHarness implements AgentHarness {
       .join("\n")
       .trim();
     if (text === "") {
-      throw new Error("agent reply contained no text content");
+      return { ok: false, error: "agent reply contained no text content" };
     }
     return {
-      content: text,
-      model: `${this.options.provider}:${reply.model || this.options.modelId}`,
-      tokensIn: reply.usage.input,
-      tokensOut: reply.usage.output,
-      costUsd: reply.usage.cost.total,
+      ok: true,
+      reply: {
+        content: text,
+        model: `${this.options.provider}:${reply.model || this.options.modelId}`,
+        tokensIn: reply.usage.input,
+        tokensOut: reply.usage.output,
+        costUsd: reply.usage.cost.total,
+      },
     };
   }
 }

@@ -14,7 +14,11 @@ export interface Config {
   logBackupCount: number;
   llmProvider: string;
   llmModel: string;
+  llmThinking: ThinkingLevel;
 }
+
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 function envStr(name: string, fallback: string): string {
   const value = Deno.env.get(name);
@@ -77,7 +81,18 @@ export function loadConfig(): Config {
     llmProvider: envStr("LLM_PROVIDER", "openrouter"),
     // Empty string = the provider's default model (see DEFAULT_LLM_MODELS).
     llmModel: envStr("LLM_MODEL", ""),
+    // Auto-clamped to what the model supports: reasoning-mandatory models
+    // raise "off" to their minimum, non-reasoning models force "off".
+    llmThinking: envThinkingLevel("LLM_THINKING", "off"),
   };
+}
+
+function envThinkingLevel(name: string, fallback: ThinkingLevel): ThinkingLevel {
+  const raw = envStr(name, fallback);
+  if (!THINKING_LEVELS.includes(raw as ThinkingLevel)) {
+    throw new Error(`Invalid ${name}: expected ${THINKING_LEVELS.join("|")}, got "${raw}"`);
+  }
+  return raw as ThinkingLevel;
 }
 
 export const config: Config = loadConfig();

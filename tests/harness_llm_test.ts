@@ -105,6 +105,108 @@ Deno.test("llm harness sends hydrated history + anchor + follow-ups and the supp
   ]);
 });
 
+Deno.test("thinking level is clamped to the model's capabilities", async () => {
+  // Non-reasoning faux model: a requested "medium" must clamp down to "off".
+  const fauxPlain = fauxProvider();
+  const plainModels = createModels();
+  plainModels.setProvider(fauxPlain.provider);
+  let plainOptions: { reasoning?: string } | undefined;
+  fauxPlain.setResponses([(_context, options) => {
+    plainOptions = options;
+    return fauxAssistantMessage("plain ok");
+  }]);
+  const plainHarness = createLlmHarness({
+    provider: fauxPlain.provider.id,
+    modelId: fauxPlain.getModel().id,
+    apiKey: "test-key",
+    thinkingLevel: "medium",
+    models: plainModels,
+    model: fauxPlain.getModel(),
+  });
+  await plainHarness.run({
+    threadId: "tkt_1",
+    customerId: "cust_7",
+    message: record("m1", "customer", "hi", 1000),
+    history: [],
+  });
+  assertEquals(plainOptions?.reasoning ?? "off", "off");
+
+  // Reasoning-capable faux model: "medium" passes through unchanged.
+  const fauxReasoning = fauxProvider({ models: [{ id: "faux-reasoner", reasoning: true }] });
+  const reasoningModels = createModels();
+  reasoningModels.setProvider(fauxReasoning.provider);
+  let reasoningOptions: { reasoning?: string } | undefined;
+  fauxReasoning.setResponses([(_context, options) => {
+    reasoningOptions = options;
+    return fauxAssistantMessage("reasoned ok");
+  }]);
+  const reasoningHarness = createLlmHarness({
+    provider: fauxReasoning.provider.id,
+    modelId: "faux-reasoner",
+    apiKey: "test-key",
+    thinkingLevel: "medium",
+    models: reasoningModels,
+    model: fauxReasoning.getModel("faux-reasoner"),
+  });
+  await reasoningHarness.run({
+    threadId: "tkt_1",
+    customerId: "cust_7",
+    message: record("m1", "customer", "hi", 1000),
+    history: [],
+  });
+  assertEquals(reasoningOptions?.reasoning, "medium");
+});
+
+Deno.test("'reasoning is mandatory' rejection auto-bumps the thinking level, retries, and memoizes", async () => {
+  const faux = fauxProvider({ models: [{ id: "faux-mandatory", reasoning: true }] });
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const seenLevels: (string | undefined)[] = [];
+  const capture = (reply: string) => (_context: Context, options?: { reasoning?: string }) => {
+    seenLevels.push(options?.reasoning);
+    return fauxAssistantMessage(reply);
+  };
+  faux.setResponses([
+    // The catalog said "off" is fine; the live endpoint disagrees.
+    (_context: Context, options?: { reasoning?: string }) => {
+      seenLevels.push(options?.reasoning);
+      return fauxAssistantMessage("", {
+        stopReason: "error",
+        errorMessage: "Reasoning is mandatory for this endpoint and cannot be disabled",
+      });
+    },
+    capture("recovered reply"),
+    capture("second message reply"),
+  ]);
+  const harness = createLlmHarness({
+    provider: faux.provider.id,
+    modelId: "faux-mandatory",
+    apiKey: "test-key",
+    thinkingLevel: "off",
+    models,
+    model: faux.getModel("faux-mandatory"),
+  });
+
+  const first = await harness.run({
+    threadId: "tkt_1",
+    customerId: "cust_7",
+    message: record("m1", "customer", "hello", 1000),
+    history: [],
+  });
+  assertEquals(first.content, "recovered reply");
+
+  // Memoized: the next run goes straight to the bumped level, no failed call.
+  const second = await harness.run({
+    threadId: "tkt_1",
+    customerId: "cust_7",
+    message: record("m2", "customer", "again", 2000),
+    history: [],
+  });
+  assertEquals(second.content, "second message reply");
+  // pi omits the reasoning option entirely at "off" — hence undefined first.
+  assertEquals(seenLevels, [undefined, "minimal", "minimal"]);
+});
+
 Deno.test("llm harness throws on provider error so the worker retry path engages", async () => {
   const { faux, harness } = makeHarness();
   faux.setResponses([

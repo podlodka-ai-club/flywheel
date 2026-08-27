@@ -31,6 +31,7 @@ if (import.meta.main) {
     agentMode: harness.mode,
     llmProvider: llmSetup?.provider ?? null,
     llmModel: llmSetup !== undefined ? (config.llmModel || "(provider default)") : null,
+    llmThinking: llmSetup !== undefined ? config.llmThinking : null,
     workerConcurrency: config.workerConcurrency,
     pollIntervalMs: config.pollIntervalMs,
     maxRetries: config.maxRetries,
