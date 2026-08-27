@@ -138,7 +138,7 @@ Your testing loop: `deno task start` (engine) in one terminal, `deno task dev:ui
 
 **Build:**
 - **Connector seam** (`src/connectors/`): typed client interfaces (`KnowledgeBaseConnector`, `CrmConnector`, `DeploymentConnector`) with mock implementations that behave like external calls — async, simulated latency, `connector_request` logs — against `fixtures/` data (fictional B2B product "DataBridge", three interlocking customers). Real wiki/CRM/telemetry clients later implement the same interfaces; tools don't change.
-- **Tools** (`src/agent/tools/index.ts`), built per run and closed over the verified identity:
+- **Tools** (`src/agent/tools/`, one file per tool, assembled in `index.ts`), built per run and closed over the verified identity:
   - `search_knowledge_base(query, limit?)` — documentation search (wiki/Confluence/Notion stand-in)
   - `lookup_customer_account()` — CRM record; **no id parameter, hard-bound to the verified customer**
   - `lookup_customer_setup()` — deployment state (version, environment, dependencies, known issues); same hard binding

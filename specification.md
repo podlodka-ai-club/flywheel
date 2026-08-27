@@ -313,7 +313,7 @@ sequenceDiagram
 Tools are `pi-agent-core` `AgentTool`s, built fresh for each agent run and closed over the run's context. Tool calls and execution traces are emitted to structured logs (`tool_executed` / `tool_failed`).
 
 ```typescript
-// Per-run context the tools close over (src/agent/tools/index.ts)
+// Per-run context the tools close over (src/agent/tools/context.ts)
 export interface ToolRunContext {
   threadId: string;
   customerId: string | null;   // verified identity from the external platform — never from message text
