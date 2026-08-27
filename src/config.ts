@@ -12,6 +12,8 @@ export interface Config {
   logDir: string;
   logMaxBytes: number;
   logBackupCount: number;
+  llmProvider: string;
+  llmModel: string;
 }
 
 function envStr(name: string, fallback: string): string {
@@ -62,8 +64,9 @@ export function loadConfig(): Config {
     devUiPort: envInt("DEV_UI_PORT", 8787),
     workerConcurrency: envInt("WORKER_CONCURRENCY", 2),
     pollIntervalMs: envInt("POLL_INTERVAL_MS", 500),
-    // Echo until Milestone 4 delivers the real pi.dev harness.
-    agentMode: envAgentMode("AGENT_MODE", "echo"),
+    // The real agent is the default from M4 on; AGENT_MODE=echo stays
+    // available for key-free regression testing.
+    agentMode: envAgentMode("AGENT_MODE", "llm"),
     reaperIntervalMs: envInt("REAPER_INTERVAL_MS", 5000),
     // Opt-in [[sleep:ms]] / [[fail]] markers, honored by the echo agent only.
     devFaults: envBool("DEV_FAULTS", false),
@@ -71,6 +74,9 @@ export function loadConfig(): Config {
     logDir: envStr("LOG_DIR", "./data/logs"),
     logMaxBytes: envInt("LOG_MAX_BYTES", 5_242_880),
     logBackupCount: envInt("LOG_BACKUP_COUNT", 3),
+    llmProvider: envStr("LLM_PROVIDER", "openrouter"),
+    // Empty string = the provider's default model (see DEFAULT_LLM_MODELS).
+    llmModel: envStr("LLM_MODEL", ""),
   };
 }
 

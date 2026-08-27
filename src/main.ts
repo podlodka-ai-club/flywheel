@@ -1,14 +1,18 @@
 import { config } from "./config.ts";
 import { configureLogging, logger, teardownLogging } from "./logger/index.ts";
 import { openDb } from "./db/client.ts";
-import { createHarness } from "./agent/harness.ts";
+import { createHarness, resolveLlmSetup } from "./agent/harness.ts";
 import { startReaper } from "./engine/reaper.ts";
 import { startWorkers } from "./engine/worker.ts";
 
 if (import.meta.main) {
   const logFile = configureLogging({ name: "engine" });
   const db = openDb(config.databasePath);
-  const harness = createHarness(config.agentMode, { devFaults: config.devFaults });
+  const llmSetup = config.agentMode === "llm" ? resolveLlmSetup(config) : undefined;
+  const harness = createHarness(config.agentMode, {
+    devFaults: config.devFaults,
+    llm: llmSetup,
+  });
   const pool = startWorkers(db, harness, {
     workerConcurrency: config.workerConcurrency,
     pollIntervalMs: config.pollIntervalMs,
@@ -25,6 +29,8 @@ if (import.meta.main) {
     logFile,
     databasePath: config.databasePath,
     agentMode: harness.mode,
+    llmProvider: llmSetup?.provider ?? null,
+    llmModel: llmSetup !== undefined ? (config.llmModel || "(provider default)") : null,
     workerConcurrency: config.workerConcurrency,
     pollIntervalMs: config.pollIntervalMs,
     maxRetries: config.maxRetries,

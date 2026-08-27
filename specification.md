@@ -429,14 +429,15 @@ The application runs with explicit, least-privilege Deno permissions:
 
 ```bash
 deno run \
-  --allow-net=api.anthropic.com,api.openai.com \
+  --env-file=.env \
+  --allow-net=openrouter.ai,generativelanguage.googleapis.com \
   --allow-read=./data,./schema.sql \
   --allow-write=./data \
-  --allow-env=DATABASE_PATH,ANTHROPIC_API_KEY,OPENAI_API_KEY,LOG_LEVEL,LOCK_TIMEOUT_MS,MAX_RETRIES,WORKER_CONCURRENCY,POLL_INTERVAL_MS,AGENT_MODE,REAPER_INTERVAL_MS,LOG_DIR,LOG_MAX_BYTES,LOG_BACKUP_COUNT \
+  --allow-env --allow-sys \
   src/main.ts
 ```
 
-(The canonical task lives in `deno.json`; LLM provider hosts/keys join the allowlists in the milestone that wires the real agent. Log files stay under `./data`, so no write scope beyond `./data` is ever needed.)
+(The canonical task lives in `deno.json`. The network allowlist is pinned to the configured LLM providers and the file scopes to `./data` — those are the boundaries that matter. `--allow-env`/`--allow-sys` are deliberately broad for the engine: the LLM SDK dynamically probes provider/cache env vars and system metadata (e.g. `PI_CACHE_RETENTION`, `osRelease`), which an enumerated list cannot anticipate; secrets already live in the environment the engine is trusted with. The dev harness and db tasks keep strict enumerated env lists.)
 
 ### 9.2. SQLite Operational Settings
 

@@ -70,7 +70,8 @@ Your testing loop: `deno task start` (engine) in one terminal, `deno task dev:ui
 - `customer_id` as a first-class column (added on request, for B2B memory later): propagated ingest → customer row → reply row → agent input; `idx_messages_customer`; additive migration for existing DBs
 
 **You verify (all from the browser; engine in its own terminal, started as:**
-`DEV_FAULTS=1 LOCK_TIMEOUT_MS=6000 REAPER_INTERVAL_MS=1000 deno task start`**):**
+`AGENT_MODE=echo DEV_FAULTS=1 LOCK_TIMEOUT_MS=6000 REAPER_INTERVAL_MS=1000 deno task start`
+**— `AGENT_MODE=echo` matters since M4 made `llm` the default and fault markers are echo-only):**
 1. **Crash recovery:** send `[[sleep_once:20000]] hello`, `kill -9` the engine while it sleeps (`engine_started` logs its pid), restart it → within ~7s the reaper reclaims the orphaned lease and the instant retry produces exactly one reply.
 2. **Reaped while alive:** send `[[sleep_once:10000]] race` — at ~6s the reaper reclaims the lease while worker A still sleeps; worker B's instant retry replies (exactly one reply in the UI); at ~10s worker A wakes and logs `reply_discarded_lost_lease`.
 3. **Coalescing:** send `[[sleep:4000]] first`, then two follow-ups during the sleep → ONE consolidated reply `ECHO: [[sleep:4000]] first | second | third` (each regeneration re-applies the sleep, so allow ~8–12s).
@@ -104,23 +105,29 @@ Your testing loop: `deno task start` (engine) in one terminal, `deno task dev:ui
 
 ## M4 — Real AI agent (pi.dev)
 
-**Goal:** swap echo for the real LLM agent: pi-ai gateway, pi-agent-core loop, thread hydration, telemetry. Requires LLM API key (e.g. OpenRouter).
+**Goal:** swap echo for the real LLM agent: pi-ai gateway, pi-agent-core loop, thread hydration, telemetry. Requires an LLM API key.
+
+**Configuration** (the `start` task auto-loads `.env`; put keys there, never in chat/commits):
+- `LLM_PROVIDER` — `openrouter` (default, uses `OPENROUTER_API_KEY`) or `google` (uses `GEMINI_API_KEY`); other pi-ai providers work via their conventional `<PROVIDER>_API_KEY`
+- `LLM_MODEL` — empty = provider default: `openai/gpt-4o-mini` on OpenRouter, `gemini-2.5-flash` on Google
+- `AGENT_MODE` — now defaults to `llm`; `echo` remains for key-free testing (fault markers still echo-only)
+- Missing key → the engine fails fast at startup with the exact fix in the error message
 
 **Build:**
-- `src/agent/harness.ts`: real implementation via `@earendil-works/pi-agent-core` + `@earendil-works/pi-ai` (`AGENT_MODE=llm`, the default)
-- `src/agent/hydrator.ts`: completed thread rows → agent conversation turns
-- `src/agent/prompt.ts`: support system prompt
-- Coalescing regeneration prompt ("the customer has since added: …")
-- Telemetry: `model`, `tokens_in`/`tokens_out`, `cost_usd` on reply rows; `message_completed` log events
-- Harness: telemetry chips on reply bubbles (model · tokens · cost)
+- `src/agent/harness.ts`: real implementation via `@earendil-works/pi-agent-core` + `@earendil-works/pi-ai` — fresh `Agent` per run, seeded with hydrated history, prompted with the anchor + coalesced follow-ups as separate user turns; provider errors throw so the worker retry/fail path engages
+- `src/agent/hydrator.ts`: completed thread rows → agent conversation turns (assistant turns synthesized provider-agnostically, so echo-era and cross-model history stays valid)
+- `src/agent/prompt.ts`: B2B support system prompt (verified customer identity, honesty rules, prompt-injection stance, coalesced-messages rule)
+- Telemetry: `model` (`provider:model_id`), `tokens_in`/`tokens_out`, `cost_usd` on reply rows; `message_completed` log events carry them
+- Harness UI: telemetry chip on reply bubbles (model · tokens in→out · cost)
+- Engine task: loads `.env`, network allowlist pinned to `openrouter.ai` + `generativelanguage.googleapis.com`; `--allow-env`/`--allow-sys` are broad for the engine only (the LLM SDK probes env/system metadata dynamically — file/network scopes stay strict)
 
 **You verify:**
-1. Ask a real question in the browser, get a real support-style answer.
+1. Put your key in `.env`, run `deno task start` + `deno task dev:ui` → ask a real question in the browser, get a real support-style answer (thread `tkt_m4_live` holds the first live conversation from my verification).
 2. A follow-up like "what did I just ask you?" proves thread memory via hydration.
-3. Reply bubbles show model/tokens/cost; the engine terminal shows `message_completed` events.
-4. `AGENT_MODE=echo` still works — free regression testing forever after.
+3. Reply bubbles show model/tokens/cost; `message_completed` in the Logs view carries the same numbers.
+4. `AGENT_MODE=echo deno task start` still works — free regression testing forever after.
 
-**Automated tests:** hydration mapping, harness against a mocked provider (no network in tests).
+**Automated tests:** hydration mapping; LLM harness against pi-ai's faux provider (no network): reply + telemetry mapping, full context assembly (system prompt, history, anchor, follow-ups), provider-error → retry path.
 
 ---
 

@@ -1,4 +1,10 @@
+import { Agent } from "@earendil-works/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Api, AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
+import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import type { MessageRecord } from "../db/messages.ts";
+import { buildPromptMessages, hydrateThreadHistory } from "./hydrator.ts";
+import { buildSystemPrompt } from "./prompt.ts";
 
 export interface AgentReply {
   content: string;
@@ -93,10 +99,151 @@ class EchoHarness implements AgentHarness {
   }
 }
 
-export function createHarness(mode: string, options: HarnessOptions = {}): AgentHarness {
+/** Per-provider default models (overridable via LLM_MODEL). */
+export const DEFAULT_LLM_MODELS: Record<string, string> = {
+  openrouter: "openai/gpt-4o-mini",
+  google: "gemini-2.5-flash",
+};
+
+/** Conventional API-key env var per provider (pi-ai's own conventions). */
+export const PROVIDER_KEY_ENVS: Record<string, string> = {
+  openrouter: "OPENROUTER_API_KEY",
+  google: "GEMINI_API_KEY",
+  openai: "OPENAI_API_KEY",
+  anthropic: "ANTHROPIC_API_KEY",
+};
+
+export interface LlmSetup {
+  provider: string;
+  modelId: string;
+  apiKey: string;
+}
+
+/**
+ * Resolve and validate the LLM configuration, failing fast with actionable
+ * errors at startup rather than at first message.
+ */
+export function resolveLlmSetup(
+  input: { llmProvider: string; llmModel: string },
+): LlmSetup {
+  const provider = input.llmProvider;
+  const modelId = input.llmModel !== "" ? input.llmModel : DEFAULT_LLM_MODELS[provider];
+  if (modelId === undefined) {
+    throw new Error(
+      `LLM_PROVIDER "${provider}" has no default model — set LLM_MODEL explicitly ` +
+        `(supported out of the box: ${Object.keys(DEFAULT_LLM_MODELS).join(", ")})`,
+    );
+  }
+  const keyEnv = PROVIDER_KEY_ENVS[provider] ??
+    `${provider.toUpperCase().replaceAll("-", "_")}_API_KEY`;
+  const apiKey = Deno.env.get(keyEnv) ?? "";
+  if (apiKey === "") {
+    throw new Error(
+      `AGENT_MODE=llm needs an API key: set ${keyEnv} in your environment or in a .env file ` +
+        `(the start task loads .env automatically). Alternatives: switch provider via LLM_PROVIDER ` +
+        `(${Object.keys(DEFAULT_LLM_MODELS).join(", ")}), or run without an LLM via AGENT_MODE=echo.`,
+    );
+  }
+  return { provider, modelId, apiKey };
+}
+
+export interface LlmHarnessOptions extends LlmSetup {
+  /** Injectable for tests: model catalog and/or a canned stream function. */
+  models?: Models;
+  model?: Model<Api>;
+  streamFn?: StreamFn;
+}
+
+/**
+ * The real agent (spec §5): pi-agent-core loop over pi-ai's provider gateway.
+ * Each run builds a fresh Agent seeded with the thread's completed history,
+ * prompts it with the anchor (+ any coalesced follow-ups) as user turns, and
+ * maps the final assistant message to an AgentReply with usage telemetry.
+ */
+class LlmHarness implements AgentHarness {
+  readonly mode = "llm";
+  private readonly models: Models;
+  private readonly model: Model<Api>;
+  private readonly streamFn: StreamFn;
+
+  constructor(private readonly options: LlmHarnessOptions) {
+    this.models = options.models ?? builtinModels();
+    const model = options.model ?? this.models.getModel(options.provider, options.modelId);
+    if (model === undefined) {
+      const sample = this.models.getModels(options.provider).slice(0, 5).map((m) => m.id);
+      throw new Error(
+        `Model "${options.modelId}" not found for provider "${options.provider}". ` +
+          (sample.length > 0
+            ? `Examples of valid LLM_MODEL values: ${sample.join(", ")}`
+            : `Unknown provider — supported examples: ${Object.keys(DEFAULT_LLM_MODELS).join(", ")}`),
+      );
+    }
+    this.model = model;
+    this.streamFn = options.streamFn ??
+      ((m, context, streamOptions) => this.models.streamSimple(m, context, streamOptions));
+  }
+
+  async run(input: AgentRunInput): Promise<AgentReply> {
+    const agent = new Agent({
+      initialState: {
+        systemPrompt: buildSystemPrompt({ threadId: input.threadId, customerId: input.customerId }),
+        model: this.model,
+        thinkingLevel: "off",
+        tools: [],
+        messages: hydrateThreadHistory(input.history),
+      },
+      streamFn: this.streamFn,
+      getApiKey: () => this.options.apiKey,
+      maxRetryDelayMs: 10_000,
+    });
+    const stopOnAbort = () => agent.abort();
+    input.signal?.addEventListener("abort", stopOnAbort, { once: true });
+    try {
+      await agent.prompt(buildPromptMessages(input.message, input.followUps ?? []));
+    } finally {
+      input.signal?.removeEventListener("abort", stopOnAbort);
+    }
+
+    const reply = [...agent.state.messages].reverse()
+      .find((m): m is AssistantMessage => m.role === "assistant");
+    if (reply === undefined) {
+      throw new Error(agent.state.errorMessage ?? "agent produced no assistant reply");
+    }
+    if (reply.stopReason === "error" || reply.stopReason === "aborted") {
+      throw new Error(reply.errorMessage ?? `LLM run ended with stopReason=${reply.stopReason}`);
+    }
+    const text = reply.content
+      .filter((block): block is Extract<typeof block, { type: "text" }> => block.type === "text")
+      .map((block) => block.text)
+      .join("\n")
+      .trim();
+    if (text === "") {
+      throw new Error("agent reply contained no text content");
+    }
+    return {
+      content: text,
+      model: `${this.options.provider}:${reply.model || this.options.modelId}`,
+      tokensIn: reply.usage.input,
+      tokensOut: reply.usage.output,
+      costUsd: reply.usage.cost.total,
+    };
+  }
+}
+
+export function createLlmHarness(options: LlmHarnessOptions): AgentHarness {
+  return new LlmHarness(options);
+}
+
+export function createHarness(
+  mode: string,
+  options: HarnessOptions & { llm?: LlmSetup } = {},
+): AgentHarness {
   if (mode === "echo") return new EchoHarness(options.devFaults ?? false);
   if (mode === "llm") {
-    throw new Error("AGENT_MODE=llm arrives in Milestone 4 — run with AGENT_MODE=echo until then");
+    if (options.llm === undefined) {
+      throw new Error("createHarness('llm') requires the resolved LLM setup");
+    }
+    return createLlmHarness(options.llm);
   }
   throw new Error(`Unknown AGENT_MODE "${mode}"`);
 }

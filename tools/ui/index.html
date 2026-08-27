@@ -533,6 +533,15 @@ function renderMessages() {
       foot.appendChild(btn);
     }
     if (m.role === "assistant") {
+      if (m.model) {
+        const telemetry = document.createElement("span");
+        telemetry.className = "mono";
+        telemetry.title = "model · tokens in→out · cost";
+        const tokens = (m.tokensIn ?? "–") + "→" + (m.tokensOut ?? "–");
+        const cost = m.costUsd != null ? " · $" + m.costUsd.toFixed(4) : "";
+        telemetry.textContent = m.model + " · " + tokens + " tok" + cost;
+        foot.appendChild(telemetry);
+      }
       if (m.inReplyTo) {
         const rel = document.createElement("span");
         rel.className = "mono";
