@@ -29,6 +29,7 @@ Flywheel is a B2B AI customer-support agent framework: Deno 2.x, SQLite (WAL) as
 - Tools depend only on the connector interfaces in `src/connectors/types.ts` (mocks today; real clients swap in behind the same seam).
 - Schema changes are **additive migrations** in `src/db/client.ts` `migrate()` (checked via `PRAGMA table_info`) so existing user DBs survive.
 - Logs are single-line JSON, identical on stdout and rotating files; every event carries `threadId`. Per-thread logs are a *filter* in the harness, never per-thread files.
+- Memory (spec §10): every store query keyed by `customer_id`; provenance is system-assigned — in-run `save_memory` writes are always `customer_stated` **facts** (rendered as unverified claims), episodes/playbooks come only from the summarizer; erasure = hard delete by `customer_id`. No memory for rows without a verified customer.
 
 ## pi.dev facts (hard-won)
 

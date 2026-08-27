@@ -488,8 +488,8 @@ WHERE kind = 'episode';
 
 ### 10.3. Write paths
 
-1. **Agent tools** during a run: `save_memory(kind, content, supersedes?)` and `archive_memory(id)`. The harness forces `provenance='customer_stated'` for anything derived from customer text and `agent_inferred` otherwise; the model cannot choose provenance.
-2. **End-of-ticket summarizer** (background job, like the reaper): threads whose messages are all terminal and idle longer than `SUMMARIZE_AFTER_MS` (default 24h) get one `episode` memory, written via the LLM with a cheap summarization prompt. The unique index makes the sweep idempotent.
+1. **Agent tools** during a run: `save_memory(content, supersedes?)` and `archive_memory(id)`. In-run saves are always **facts with `provenance='customer_stated'`** — the run is customer-driven, so nothing the model writes mid-run may outrank a claim; the model can choose neither kind nor provenance. (`agent_inferred` is reserved for engine-derived writes.) Episodes and playbooks are written exclusively by the summarizer, so resolution history cannot be forged from a conversation.
+2. **End-of-ticket summarizer** (background job, like the reaper): threads whose messages are all terminal and idle longer than `SUMMARIZE_AFTER_MS` (default 24h) get one `episode` memory, written via the LLM with a cheap summarization prompt. The unique index makes the sweep idempotent. The summarizer may run a different, typically cheaper provider/model than the main agent (`SUMMARIZER_PROVIDER`/`SUMMARIZER_MODEL`, defaulting to the agent's); in echo mode a deterministic summarizer keeps memory testable without a key.
 3. **Human-resolution feedback** (the self-learning loop): the external platform MAY insert `role='system', status='completed'` rows with `metadata.type='human_resolution'` carrying how a human resolved an escalated ticket (Section 3.2 extension; `status='completed'` keeps them unclaimable). The summarizer distills these into `playbook` memories — the next occurrence of the same symptom is handled without escalation.
 
 ### 10.4. Read path

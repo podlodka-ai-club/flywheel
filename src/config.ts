@@ -15,6 +15,14 @@ export interface Config {
   llmProvider: string;
   llmModel: string;
   llmThinking: ThinkingLevel;
+  memoryEnabled: boolean;
+  /** Empty = inherit llmProvider / llmModel for summarization. */
+  summarizerProvider: string;
+  summarizerModel: string;
+  summarizeAfterMs: number;
+  memoryHydrationBudget: number;
+  memoryRunWriteCap: number;
+  memoryActiveCap: number;
 }
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -84,6 +92,16 @@ export function loadConfig(): Config {
     // Auto-clamped to what the model supports: reasoning-mandatory models
     // raise "off" to their minimum, non-reasoning models force "off".
     llmThinking: envThinkingLevel("LLM_THINKING", "off"),
+    // Per-customer memory (spec §10)
+    memoryEnabled: envBool("MEMORY_ENABLED", true),
+    // Summarization is a cheap-model job — point it at a smaller model/provider
+    // than the main agent when desired; empty inherits the agent's setting.
+    summarizerProvider: envStr("SUMMARIZER_PROVIDER", ""),
+    summarizerModel: envStr("SUMMARIZER_MODEL", ""),
+    summarizeAfterMs: envInt("SUMMARIZE_AFTER_MS", 86_400_000),
+    memoryHydrationBudget: envInt("MEMORY_HYDRATION_BUDGET", 1200),
+    memoryRunWriteCap: envInt("MEMORY_RUN_WRITE_CAP", 3),
+    memoryActiveCap: envInt("MEMORY_ACTIVE_CAP", 200),
   };
 }
 

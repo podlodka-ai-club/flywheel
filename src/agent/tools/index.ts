@@ -7,6 +7,7 @@ import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 import { logger } from "../../logger/index.ts";
 import type { Connectors } from "../../connectors/types.ts";
+import type { MemoryAccess } from "../../memory/store.ts";
 
 export interface EscalationState {
   escalated: boolean;
@@ -22,6 +23,8 @@ export interface ToolRunContext {
   connectors: Connectors;
   /** Written by escalate_to_human; the harness copies it onto reply metadata. */
   escalation: EscalationState;
+  /** Present only for verified customers with memory enabled (spec §10). */
+  memory?: MemoryAccess;
 }
 
 function textResult(text: string, details: unknown = {}): AgentToolResult<unknown> {
@@ -173,6 +176,55 @@ export function buildSupportTools(context: ToolRunContext): AgentTool[] {
     },
   };
 
-  return [searchKnowledgeBase, lookupCustomerAccount, lookupCustomerSetup, escalateToHuman]
-    .map((tool) => instrument(context, tool));
+  const tools = [searchKnowledgeBase, lookupCustomerAccount, lookupCustomerSetup, escalateToHuman];
+
+  // Memory tools exist only for verified customers with memory enabled —
+  // no verified identity, no memory reads or writes (spec §10.1).
+  const memory = context.memory;
+  if (memory !== undefined) {
+    tools.push({
+      name: "save_memory",
+      label: "Remember a customer fact",
+      description:
+        "Save ONE durable fact about this customer for future tickets (environment constraints, " +
+        "maintenance windows, preferences, contacts, long-running projects). Saved entries are " +
+        "recorded as customer-provided claims. Do not save transient details, secrets, or " +
+        "entitlement/billing claims. Pass `supersedes` with an existing memory id when this " +
+        "corrects an earlier fact.",
+      parameters: Type.Object({
+        content: Type.String({ description: "The fact, one concise sentence" }),
+        supersedes: Type.Optional(
+          Type.String({ description: "Id of the outdated memory this replaces (mem_…)" }),
+        ),
+      }),
+      execute: (_id, rawParams) => {
+        const params = rawParams as { content: string; supersedes?: string };
+        const record = memory.saveFact(params.content, params.supersedes);
+        return Promise.resolve(textResult(
+          `Remembered (id ${record.id}). ${memory.writesRemaining()} memory writes left this run.`,
+          { memoryId: record.id, supersedes: params.supersedes ?? null },
+        ));
+      },
+    });
+    tools.push({
+      name: "archive_memory",
+      label: "Forget a customer fact",
+      description:
+        "Archive a remembered fact that is wrong, withdrawn, or no longer relevant. " +
+        "Use the memory id shown in your memory list (mem_…).",
+      parameters: Type.Object({
+        id: Type.String({ description: "The memory id to archive (mem_…)" }),
+      }),
+      execute: (_id, rawParams) => {
+        const params = rawParams as { id: string };
+        const archived = memory.archive(params.id);
+        if (!archived) {
+          throw new Error(`No active memory "${params.id}" found for this customer.`);
+        }
+        return Promise.resolve(textResult(`Archived memory ${params.id}.`, { memoryId: params.id }));
+      },
+    });
+  }
+
+  return tools.map((tool) => instrument(context, tool));
 }

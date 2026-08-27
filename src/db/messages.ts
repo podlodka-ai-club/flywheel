@@ -115,15 +115,50 @@ export function getThreadMessages(db: DatabaseSync, threadId: string): MessageRe
 
 /**
  * Hydration source (spec §5.1): the completed conversational rows of a thread,
- * oldest first. The in-flight (processing) anchor message is NOT included —
- * the worker passes its content to the agent separately.
+ * oldest first — including platform-inserted system rows (e.g. human
+ * resolution notes, spec §3.2 item 4), which the hydrator renders as internal
+ * context. The in-flight (processing) anchor message is NOT included — the
+ * worker passes its content to the agent separately.
  */
 export function getCompletedThreadHistory(db: DatabaseSync, threadId: string): MessageRecord[] {
   return db.prepare(
     `SELECT * FROM messages
-     WHERE thread_id = ? AND status = 'completed' AND role IN ('customer', 'assistant')
+     WHERE thread_id = ? AND status = 'completed'
      ORDER BY created_at ASC, id ASC`,
   ).all(threadId).map(rowToRecord);
+}
+
+export interface InsertSystemMessageInput {
+  threadId: string;
+  content: string;
+  customerId?: string | null;
+  metadata?: Record<string, unknown>;
+  createdAt?: number;
+}
+
+/**
+ * Platform-inserted system row (spec §3.2 item 4): status='completed' keeps
+ * it unclaimable — the engine never replies to it, only learns from it.
+ */
+export function insertSystemMessage(
+  db: DatabaseSync,
+  input: InsertSystemMessageInput,
+): MessageRecord {
+  const id = `sys_${crypto.randomUUID()}`;
+  const now = input.createdAt ?? Date.now();
+  db.prepare(
+    `INSERT INTO messages (id, thread_id, customer_id, role, content, status, metadata, created_at, completed_at)
+     VALUES (?, ?, ?, 'system', ?, 'completed', ?, ?, ?)`,
+  ).run(
+    id,
+    input.threadId,
+    input.customerId ?? null,
+    input.content,
+    input.metadata === undefined ? null : JSON.stringify(input.metadata),
+    now,
+    now,
+  );
+  return getMessage(db, id)!;
 }
 
 /**

@@ -273,6 +273,74 @@ Deno.test("tool loop e2e: escalation flag lands on reply metadata; KB result rea
   assertStringIncludes(toolResultSeen, "Exporting data to CSV");
 });
 
+Deno.test("memory e2e: hydrated memories reach the system prompt; save_memory persists via the agent loop", async () => {
+  const { fauxToolCall } = await import("@earendil-works/pi-ai");
+  const { openDb } = await import("../src/db/client.ts");
+  const { createMemoryAccess, listActiveMemories } = await import("../src/memory/store.ts");
+  const { join } = await import("node:path");
+
+  const dir = await Deno.makeTempDir({ prefix: "flywheel_memharness_test_" });
+  const db = openDb(join(dir, "test.db"));
+  try {
+    const seedAccess = createMemoryAccess(db, {
+      customerId: "cust_7",
+      threadId: "tkt_seed",
+      hydrationBudgetTokens: 800,
+      runWriteCap: 3,
+      activeCap: 100,
+    });
+    seedAccess.saveFact("maintenance window is Sunday 02:00");
+
+    const faux = fauxProvider();
+    const models = createModels();
+    models.setProvider(faux.provider);
+    let seenPrompt = "";
+    faux.setResponses([
+      (context: Context) => {
+        seenPrompt = context.systemPrompt ?? "";
+        return fauxAssistantMessage(
+          [fauxToolCall("save_memory", { content: "deploys through Terraform" })],
+          { stopReason: "toolUse" },
+        );
+      },
+      fauxAssistantMessage("Noted — I'll keep that in mind."),
+    ]);
+    const harness = createLlmHarness({
+      provider: faux.provider.id,
+      modelId: faux.getModel().id,
+      apiKey: "test-key",
+      models,
+      model: faux.getModel(),
+    });
+    const runAccess = createMemoryAccess(db, {
+      customerId: "cust_7",
+      threadId: "tkt_1",
+      hydrationBudgetTokens: 800,
+      runWriteCap: 3,
+      activeCap: 100,
+    });
+    const reply = await harness.run({
+      threadId: "tkt_1",
+      customerId: "cust_7",
+      message: record("m1", "customer", "we deploy through Terraform, please remember", 1000),
+      history: [],
+      memory: runAccess,
+    });
+
+    assertEquals(reply.content, "Noted — I'll keep that in mind.");
+    // Read path: the seeded memory was hydrated into the system prompt, as a claim.
+    assertStringIncludes(seenPrompt, "maintenance window is Sunday 02:00");
+    assertStringIncludes(seenPrompt, "claimed by customer");
+    assertStringIncludes(seenPrompt, "save_memory");
+    // Write path: the tool call persisted with forced provenance.
+    const facts = listActiveMemories(db, "cust_7").map((m) => ({ c: m.content, p: m.provenance }));
+    assert(facts.some((f) => f.c === "deploys through Terraform" && f.p === "customer_stated"));
+  } finally {
+    db.close();
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
 Deno.test("hydrateThreadHistory maps roles and preserves order/timestamps", () => {
   const messages = hydrateThreadHistory([
     record("c1", "customer", "first", 1000),

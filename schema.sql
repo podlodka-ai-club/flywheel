@@ -56,3 +56,28 @@ WHERE status = 'failed' AND sent_to_customer_at IS NULL;
 -- Per-customer queries: audit today, memory scoping in future phases
 CREATE INDEX IF NOT EXISTS idx_messages_customer
 ON messages(customer_id, created_at ASC);
+
+-- Per-customer memory (spec §10). Hard-isolated by customer_id; provenance is
+-- mandatory and system-assigned; superseded/archived rows never hydrate.
+CREATE TABLE IF NOT EXISTS memories (
+    id TEXT PRIMARY KEY,                 -- mem_<uuid>
+    customer_id TEXT NOT NULL,           -- hard isolation key
+    kind TEXT NOT NULL,                  -- 'fact' | 'episode' | 'playbook'
+    content TEXT NOT NULL,               -- one concise fact / summary / symptom→fix
+    provenance TEXT NOT NULL,            -- 'customer_stated' | 'agent_inferred' | 'ticket_summary' | 'human_resolution'
+    source_thread_id TEXT,               -- ticket that produced it
+    created_at INTEGER NOT NULL,         -- Unix ms
+    updated_at INTEGER NOT NULL,         -- Unix ms
+    expires_at INTEGER,                  -- optional decay (episodes by default)
+    superseded_by TEXT,                  -- correction chain; superseded rows never hydrate
+    archived_at INTEGER                  -- soft-forget (audit-preserving)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memories_active
+ON memories(customer_id, kind, updated_at DESC)
+WHERE archived_at IS NULL AND superseded_by IS NULL;
+
+-- One episode summary per ticket (summarizer idempotency)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_episode_once
+ON memories(source_thread_id)
+WHERE kind = 'episode';

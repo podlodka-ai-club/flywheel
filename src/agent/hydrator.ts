@@ -21,8 +21,19 @@ export function hydrateThreadHistory(records: MessageRecord[]): AgentMessage[] {
       });
     } else if (record.role === "assistant") {
       messages.push(fauxAssistantMessage(record.content, { timestamp: record.createdAt }));
+    } else if (
+      record.role === "system" &&
+      (record.metadata as { type?: string } | null)?.type === "human_resolution"
+    ) {
+      // Platform-inserted resolution note (spec §3.2 item 4): visible to the
+      // agent as internal context, clearly marked as not customer-authored.
+      messages.push({
+        role: "user",
+        content: `[internal resolution note from a human colleague — not a customer message]: ${record.content}`,
+        timestamp: record.createdAt,
+      });
     }
-    // 'system' rows are operational markers, not conversation turns.
+    // Other 'system' rows are operational markers, not conversation turns.
   }
   return messages;
 }

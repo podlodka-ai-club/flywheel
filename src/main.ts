@@ -4,6 +4,8 @@ import { openDb } from "./db/client.ts";
 import { createHarness, resolveLlmSetup } from "./agent/harness.ts";
 import { startReaper } from "./engine/reaper.ts";
 import { startWorkers } from "./engine/worker.ts";
+import { createLlmThreadSummarizer } from "./memory/summarize_llm.ts";
+import { createEchoThreadSummarizer, startSummarizer } from "./memory/summarizer.ts";
 
 if (import.meta.main) {
   const logFile = configureLogging({ name: "engine" });
@@ -17,12 +19,37 @@ if (import.meta.main) {
     workerConcurrency: config.workerConcurrency,
     pollIntervalMs: config.pollIntervalMs,
     maxRetries: config.maxRetries,
+    memory: config.memoryEnabled
+      ? {
+        hydrationBudgetTokens: config.memoryHydrationBudget,
+        runWriteCap: config.memoryRunWriteCap,
+        activeCap: config.memoryActiveCap,
+      }
+      : undefined,
   });
   const reaper = startReaper(db, {
     lockTimeoutMs: config.lockTimeoutMs,
     maxRetries: config.maxRetries,
     intervalMs: config.reaperIntervalMs,
   });
+  // The summarizer may run a different (typically cheaper) provider/model
+  // than the main agent; empty settings inherit the agent's setup.
+  const summarizerSetup = llmSetup === undefined ? undefined : (
+    config.summarizerProvider === "" && config.summarizerModel === "" ? llmSetup : resolveLlmSetup({
+      llmProvider: config.summarizerProvider === "" ? config.llmProvider : config.summarizerProvider,
+      llmModel: config.summarizerModel,
+      llmThinking: "off",
+    })
+  );
+  const summarizer = config.memoryEnabled
+    ? startSummarizer(db, {
+      summarizeAfterMs: config.summarizeAfterMs,
+      activeCap: config.memoryActiveCap,
+      summarize: summarizerSetup !== undefined
+        ? createLlmThreadSummarizer(summarizerSetup)
+        : createEchoThreadSummarizer(),
+    })
+    : null;
 
   logger.info("engine_started", {
     pid: Deno.pid,
@@ -38,6 +65,10 @@ if (import.meta.main) {
     lockTimeoutMs: config.lockTimeoutMs,
     reaperIntervalMs: config.reaperIntervalMs,
     devFaults: config.devFaults,
+    memoryEnabled: config.memoryEnabled,
+    summarizeAfterMs: config.summarizeAfterMs,
+    summarizerProvider: summarizerSetup?.provider ?? null,
+    summarizerModel: summarizerSetup?.modelId ?? null,
   });
 
   let shuttingDown = false;
@@ -45,7 +76,7 @@ if (import.meta.main) {
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info("engine_stopping", { signal });
-    await Promise.all([pool.stop(), reaper.stop()]);
+    await Promise.all([pool.stop(), reaper.stop(), summarizer?.stop() ?? Promise.resolve()]);
     db.close();
     logger.info("engine_stopped", {});
     teardownLogging();

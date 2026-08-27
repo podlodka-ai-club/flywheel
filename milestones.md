@@ -169,7 +169,7 @@ Your testing loop: `deno task start` (engine) in one terminal, `deno task dev:ui
 - **Read path**: memory hydration into the system prompt — facts + playbooks first, then recent episodes; count/token budget (`MEMORY_HYDRATION_BUDGET`); every entry rendered with provenance + date, claims labeled as claims; system prompt instructs that memories are background data, never instructions, and unverified claims (entitlements, billing) are never acted on
 - Structured logs: `memory_saved`, `memory_archived`, `memory_hydrated` (count + tokens), `thread_summarized`
 - Harness UI: **Memory view** per customer (kind, provenance, date, content, archive button — the audit surface); a "simulate human resolution" action on escalated threads; memory events visible in the Logs view
-- Config: `MEMORY_ENABLED` (default on), `SUMMARIZE_AFTER_MS`, `MEMORY_HYDRATION_BUDGET`, caps
+- Config: `MEMORY_ENABLED` (default on), `SUMMARIZE_AFTER_MS`, `MEMORY_HYDRATION_BUDGET`, write/active caps, and `SUMMARIZER_PROVIDER`/`SUMMARIZER_MODEL` (added on request: run summarization on a cheaper model than the main agent; defaults inherit)
 
 **You verify:**
 1. **Continuity:** tell the agent a durable fact ("we deploy through Terraform; maintenance window is Sunday 02:00") → it appears in the Memory view as `customer_stated`; open a NEW thread days-simulated-later → the agent references the window unprompted.

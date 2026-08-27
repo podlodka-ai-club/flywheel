@@ -9,11 +9,20 @@ import {
   releaseClaim,
 } from "../db/queue.ts";
 import { logger } from "../logger/index.ts";
+import { createMemoryAccess } from "../memory/store.ts";
+
+export interface WorkerMemoryOptions {
+  hydrationBudgetTokens: number;
+  runWriteCap: number;
+  activeCap: number;
+}
 
 export interface WorkerOptions {
   workerConcurrency: number;
   pollIntervalMs: number;
   maxRetries: number;
+  /** Present = memory enabled; access is built per run for verified customers. */
+  memory?: WorkerMemoryOptions;
 }
 
 export interface EnginePool {
@@ -60,6 +69,16 @@ export function startWorkers(
         message: claimed,
         history,
         followUps: extras,
+        // Memory only for verified customers with memory enabled (spec §10.1).
+        memory: options.memory !== undefined && claimed.customerId !== null
+          ? createMemoryAccess(db, {
+            customerId: claimed.customerId,
+            threadId: claimed.threadId,
+            hydrationBudgetTokens: options.memory.hydrationBudgetTokens,
+            runWriteCap: options.memory.runWriteCap,
+            activeCap: options.memory.activeCap,
+          })
+          : undefined,
         signal: abort.signal,
       };
       let reply = await harness.run(runInput);

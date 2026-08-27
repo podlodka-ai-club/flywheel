@@ -7,6 +7,8 @@ import { logger } from "../logger/index.ts";
 import type { MessageRecord } from "../db/messages.ts";
 import { createMockConnectors } from "../connectors/mock.ts";
 import type { Connectors } from "../connectors/types.ts";
+import type { MemoryAccess } from "../memory/store.ts";
+import { renderMemoriesForPrompt } from "../memory/store.ts";
 import { buildPromptMessages, hydrateThreadHistory } from "./hydrator.ts";
 import { buildSystemPrompt } from "./prompt.ts";
 import { buildSupportTools, type ToolRunContext } from "./tools/index.ts";
@@ -39,6 +41,12 @@ export interface AgentRunInput {
    * anchor AND all follow-ups as one consolidated response.
    */
   followUps?: MessageRecord[];
+  /**
+   * Per-customer memory access (spec §10), built by the worker only for
+   * verified customers with memory enabled. Absent = no reads, no writes,
+   * no memory tools.
+   */
+  memory?: MemoryAccess;
   signal?: AbortSignal;
 }
 
@@ -102,6 +110,28 @@ class EchoHarness implements AgentHarness {
       costUsd: null,
     };
   }
+}
+
+/**
+ * Provider rejections meaning "this endpoint requires a reasoning level",
+ * e.g. OpenRouter's "Reasoning is mandatory for this endpoint and cannot be
+ * disabled". The catalog metadata clampThinkingLevel relies on can lag the
+ * live endpoint, so runtime bumping is the backstop (harness + summarizer).
+ */
+export const REASONING_REQUIRED_ERROR =
+  /\breasoning\b.*?\b(mandatory|required|cannot be disabled|must be enabled)/is;
+
+/** Lowest supported reasoning level strictly above `current` for this model. */
+export function nextSupportedThinkingLevel(
+  model: Model<Api>,
+  current: ThinkingLevel,
+): ThinkingLevel | null {
+  const order: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+  const supported = getSupportedThinkingLevels(model);
+  for (const level of order.slice(order.indexOf(current) + 1)) {
+    if (supported.includes(level)) return level;
+  }
+  return null;
 }
 
 /** Per-provider default models (overridable via LLM_MODEL). */
@@ -182,14 +212,6 @@ class LlmHarness implements AgentHarness {
   /** Mutable: bumped and memoized when the provider rejects the level. */
   private thinkingLevel: ThinkingLevel;
 
-  /**
-   * Provider rejections that mean "this endpoint requires a reasoning level",
-   * e.g. OpenRouter's "Reasoning is mandatory for this endpoint and cannot be
-   * disabled". The catalog metadata clampThinkingLevel relies on can lag the
-   * live endpoint, so this is the runtime backstop.
-   */
-  private static readonly REASONING_REQUIRED_ERROR =
-    /\breasoning\b.*?\b(mandatory|required|cannot be disabled|must be enabled)/is;
 
   constructor(private readonly options: LlmHarnessOptions) {
     this.models = options.models ?? builtinModels();
@@ -219,24 +241,14 @@ class LlmHarness implements AgentHarness {
     this.connectors = options.connectors ?? createMockConnectors();
   }
 
-  /** Lowest supported reasoning level strictly above the current one. */
-  private nextThinkingLevel(): ThinkingLevel | null {
-    const order: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-    const supported = getSupportedThinkingLevels(this.model);
-    for (const level of order.slice(order.indexOf(this.thinkingLevel) + 1)) {
-      if (supported.includes(level)) return level;
-    }
-    return null;
-  }
-
   async run(input: AgentRunInput): Promise<AgentReply> {
     // Bounded by the number of thinking levels: on a "reasoning is mandatory"
     // rejection, bump one level, memoize, and retry the run.
     for (;;) {
       const result = await this.runOnce(input);
       if (result.ok) return result.reply;
-      const bumpable = LlmHarness.REASONING_REQUIRED_ERROR.test(result.error)
-        ? this.nextThinkingLevel()
+      const bumpable = REASONING_REQUIRED_ERROR.test(result.error)
+        ? nextSupportedThinkingLevel(this.model, this.thinkingLevel)
         : null;
       if (bumpable === null) throw new Error(result.error);
       logger.warn("thinking_level_bumped", {
@@ -258,10 +270,31 @@ class LlmHarness implements AgentHarness {
       customerId: input.customerId,
       connectors: this.connectors,
       escalation: { escalated: false },
+      memory: input.memory,
     };
+    let memorySection: string | undefined;
+    if (input.memory !== undefined) {
+      const rendered = renderMemoriesForPrompt(
+        input.memory.listActive(),
+        input.memory.hydrationBudgetTokens,
+      );
+      memorySection = rendered.text === "" ? undefined : rendered.text;
+      logger.info("memory_hydrated", {
+        threadId: input.threadId,
+        customerId: input.customerId,
+        count: rendered.count,
+        approxTokens: rendered.approxTokens,
+        omitted: rendered.omitted,
+      });
+    }
     const agent = new Agent({
       initialState: {
-        systemPrompt: buildSystemPrompt({ threadId: input.threadId, customerId: input.customerId }),
+        systemPrompt: buildSystemPrompt({
+          threadId: input.threadId,
+          customerId: input.customerId,
+          memorySection,
+          memoryToolsEnabled: input.memory !== undefined,
+        }),
         model: this.model,
         thinkingLevel: this.thinkingLevel,
         tools: buildSupportTools(toolContext),

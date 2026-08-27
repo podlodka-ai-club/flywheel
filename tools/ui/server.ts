@@ -14,10 +14,17 @@ import {
   getMessage,
   getThreadMessages,
   insertCustomerMessage,
+  insertSystemMessage,
   listThreads,
   listUnacknowledgedFailed,
   markDelivered,
 } from "../../src/db/messages.ts";
+import {
+  archiveMemory,
+  eraseCustomerMemories,
+  listAllMemories,
+  listMemoryCustomers,
+} from "../../src/memory/store.ts";
 
 configureLogging({ name: "dev-ui" });
 const db = openDb(config.databasePath);
@@ -72,39 +79,118 @@ async function handleIngest(req: Request): Promise<Response> {
   return json({ id, inserted });
 }
 
-const DB_FILTER_STATUSES = new Set(["pending", "processing", "completed", "failed"]);
-const DB_FILTER_ROLES = new Set(["customer", "assistant", "system"]);
+// ---- Raw table browser (Database view): any user table in the SQLite file ----
 
-// Editable columns of `messages` and how to coerce the typed text. `id` is the
-// primary key the update is addressed by, so it stays read-only.
-const DB_EDITABLE_COLUMNS: Record<string, "text" | "int" | "real" | "json"> = {
-  thread_id: "text",
-  customer_id: "text",
-  role: "text",
-  content: "text",
-  status: "text",
-  in_reply_to: "text",
-  worker_id: "text",
-  locked_at: "int",
-  attempt_count: "int",
-  error: "text",
-  model: "text",
-  tokens_in: "int",
-  tokens_out: "int",
-  cost_usd: "real",
-  metadata: "json",
-  sent_to_customer_at: "int",
-  created_at: "int",
-  completed_at: "int",
+// Enum overlays the DDL can't express (they live in schema.sql comments):
+// keep edited values inside the vocabularies the engine's queries rely on.
+const TABLE_ENUMS: Record<string, Record<string, string[]>> = {
+  messages: {
+    status: ["pending", "processing", "completed", "failed"],
+    role: ["customer", "assistant", "system"],
+  },
+  memories: {
+    kind: ["fact", "episode", "playbook"],
+    provenance: ["customer_stated", "agent_inferred", "ticket_summary", "human_resolution"],
+  },
 };
-const DB_NOT_NULL_COLUMNS = new Set(["thread_id", "role", "content", "status", "created_at"]);
+
+interface TableColumn {
+  name: string;
+  type: string;
+  notNull: boolean;
+  pk: boolean;
+}
+
+interface TableMeta {
+  name: string;
+  columns: TableColumn[];
+  /** Single-column primary key; null makes the table read-only in the UI. */
+  pk: string | null;
+}
+
+const quoteIdent = (name: string) => '"' + name.replaceAll('"', '""') + '"';
+
+function listUserTables(): string[] {
+  return db.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+  ).all().map((row) => (row as { name: string }).name);
+}
+
+function tableMeta(name: string): TableMeta | null {
+  if (!listUserTables().includes(name)) return null;
+  const columns = db.prepare(`PRAGMA table_info(${quoteIdent(name)})`).all()
+    // deno-lint-ignore no-explicit-any
+    .map((c: any) => ({
+      name: String(c.name),
+      type: String(c.type ?? "").toUpperCase(),
+      notNull: Number(c.notnull) === 1,
+      pk: Number(c.pk) > 0,
+    }));
+  const pkColumns = columns.filter((c) => c.pk);
+  return { name, columns, pk: pkColumns.length === 1 ? pkColumns[0].name : null };
+}
+
+function handleDbTables(): Response {
+  const tables = listUserTables().map((name) => {
+    const { n } = db.prepare(`SELECT COUNT(*) AS n FROM ${quoteIdent(name)}`).get() as { n: number };
+    return { name, rowCount: Number(n) };
+  });
+  return json(tables);
+}
 
 /**
- * Raw cell editor for the Database view: sets one column of one row. The value
- * arrives as the text the user typed (or null) and is coerced per column type;
- * role/status stay within their enums so engine queries keep working.
+ * Raw row browser: unmapped rows, snake_case and all, from any user table.
+ * Filters arrive as repeatable eq=column:value params (equality, ANDed);
+ * values are bound as text and SQLite's type affinity coerces per column.
  */
-async function handleDbCellEdit(req: Request, id: string): Promise<Response> {
+function handleDbRows(table: string, url: URL): Response {
+  const meta = tableMeta(table);
+  if (meta === null) {
+    return json({ error: `unknown table: ${table}` }, 400);
+  }
+  const columnNames = new Set(meta.columns.map((c) => c.name));
+
+  const where: string[] = [];
+  const params: string[] = [];
+  for (const eq of url.searchParams.getAll("eq")) {
+    const i = eq.indexOf(":");
+    const column = i === -1 ? eq : eq.slice(0, i);
+    const value = i === -1 ? "" : eq.slice(i + 1);
+    if (!columnNames.has(column)) {
+      return json({ error: `unknown column in filter: ${column}` }, 400);
+    }
+    where.push(`${quoteIdent(column)} = ?`);
+    params.push(value);
+  }
+  const limit = Math.min(1000, Math.max(1, Number.parseInt(url.searchParams.get("limit") ?? "200", 10) || 200));
+
+  const order = columnNames.has("created_at")
+    ? "created_at DESC" + (meta.pk === null ? "" : `, ${quoteIdent(meta.pk)} DESC`)
+    : meta.pk === null
+    ? ""
+    : `${quoteIdent(meta.pk)} ASC`;
+  const sql = `SELECT * FROM ${quoteIdent(table)}` +
+    (where.length > 0 ? " WHERE " + where.join(" AND ") : "") +
+    (order === "" ? "" : ` ORDER BY ${order}`) +
+    " LIMIT ?";
+  const rows = db.prepare(sql).all(...params, limit);
+  return json({ table, pk: meta.pk, readOnly: meta.pk === null, columns: meta.columns, rows });
+}
+
+/**
+ * Raw cell editor: sets one column of one row in any user table. The value
+ * arrives as the text the user typed (or null) and is coerced per the
+ * column's declared type; TABLE_ENUMS keeps engine vocabularies intact.
+ */
+async function handleDbCellEdit(req: Request, table: string, id: string): Promise<Response> {
+  const meta = tableMeta(table);
+  if (meta === null) {
+    return json({ error: `unknown table: ${table}` }, 400);
+  }
+  if (meta.pk === null) {
+    return json({ error: `${table} has no single-column primary key — read-only` }, 400);
+  }
+
   let payload: { column?: unknown; value?: unknown };
   try {
     payload = await req.json();
@@ -112,50 +198,61 @@ async function handleDbCellEdit(req: Request, id: string): Promise<Response> {
     return json({ error: "invalid JSON body" }, 400);
   }
 
-  const column = typeof payload.column === "string" ? payload.column : "";
-  if (!Object.hasOwn(DB_EDITABLE_COLUMNS, column)) {
-    return json({ error: `column not editable: ${column || "(missing)"}` }, 400);
+  const columnName = typeof payload.column === "string" ? payload.column : "";
+  const column = meta.columns.find((c) => c.name === columnName);
+  if (column === undefined) {
+    return json({ error: `unknown column: ${columnName || "(missing)"}` }, 400);
   }
-  const type = DB_EDITABLE_COLUMNS[column];
+  if (column.pk) {
+    return json({ error: `${column.name} is the primary key — not editable` }, 400);
+  }
   const raw = payload.value;
   if (raw !== null && typeof raw !== "string") {
     return json({ error: "value must be a string or null" }, 400);
   }
 
+  const declared = column.type;
+  const kind = declared.includes("INT")
+    ? "int"
+    : /REAL|FLOA|DOUB|NUMERIC|DECIMAL/.test(declared)
+    ? "real"
+    : declared.includes("JSON")
+    ? "json"
+    : "text";
+
   let value: string | number | null;
   if (raw === null) {
-    if (DB_NOT_NULL_COLUMNS.has(column)) {
-      return json({ error: `${column} is NOT NULL` }, 400);
+    if (column.notNull) {
+      return json({ error: `${column.name} is NOT NULL` }, 400);
     }
     value = null;
-  } else if (type === "int" || type === "real") {
+  } else if (kind === "int" || kind === "real") {
     const n = Number(raw.trim());
-    if (raw.trim() === "" || !Number.isFinite(n) || (type === "int" && !Number.isInteger(n))) {
-      return json({ error: `${column} expects ${type === "int" ? "an integer" : "a number"}` }, 400);
+    if (raw.trim() === "" || !Number.isFinite(n) || (kind === "int" && !Number.isInteger(n))) {
+      return json({ error: `${column.name} expects ${kind === "int" ? "an integer" : "a number"}` }, 400);
     }
     value = n;
-  } else if (type === "json") {
+  } else if (kind === "json") {
     try {
       JSON.parse(raw);
     } catch {
-      return json({ error: `${column} must be valid JSON (or NULL)` }, 400);
+      return json({ error: `${column.name} must be valid JSON (or NULL)` }, 400);
     }
     value = raw;
   } else {
     value = raw;
   }
 
-  if (column === "status" && !DB_FILTER_STATUSES.has(value as string)) {
-    return json({ error: `status must be one of: ${[...DB_FILTER_STATUSES].join(", ")}` }, 400);
-  }
-  if (column === "role" && !DB_FILTER_ROLES.has(value as string)) {
-    return json({ error: `role must be one of: ${[...DB_FILTER_ROLES].join(", ")}` }, 400);
+  const allowed = TABLE_ENUMS[table]?.[column.name];
+  if (value !== null && allowed !== undefined && !allowed.includes(String(value))) {
+    return json({ error: `${column.name} must be one of: ${allowed.join(", ")}` }, 400);
   }
 
   let updated: boolean;
   try {
-    // `column` is safe to interpolate: it was validated against DB_EDITABLE_COLUMNS.
-    const result = db.prepare(`UPDATE messages SET ${column} = ? WHERE id = ?`).run(value, id);
+    const result = db.prepare(
+      `UPDATE ${quoteIdent(table)} SET ${quoteIdent(column.name)} = ? WHERE ${quoteIdent(meta.pk)} = ?`,
+    ).run(value, id);
     updated = Number(result.changes) > 0;
   } catch (err) {
     // e.g. idx_messages_reply_once uniqueness — surface the SQLite message.
@@ -164,37 +261,8 @@ async function handleDbCellEdit(req: Request, id: string): Promise<Response> {
   if (!updated) {
     return json({ error: "row not found (deleted underneath you?)" }, 404);
   }
-  logger.info("dev_ui_db_cell_edited", { messageId: id, column });
+  logger.info("dev_ui_db_cell_edited", { table, rowId: id, column: column.name });
   return json({ updated });
-}
-
-/** Raw table browser for the Database view: unmapped rows, snake_case and all. */
-function handleDbMessages(url: URL): Response {
-  const where: string[] = [];
-  const params: (string | number)[] = [];
-
-  const status = url.searchParams.get("status") ?? "";
-  if (status !== "" && DB_FILTER_STATUSES.has(status)) {
-    where.push("status = ?");
-    params.push(status);
-  }
-  const role = url.searchParams.get("role") ?? "";
-  if (role !== "" && DB_FILTER_ROLES.has(role)) {
-    where.push("role = ?");
-    params.push(role);
-  }
-  const thread = (url.searchParams.get("thread") ?? "").trim();
-  if (thread !== "") {
-    where.push("thread_id = ?");
-    params.push(thread);
-  }
-  const limit = Math.min(1000, Math.max(1, Number.parseInt(url.searchParams.get("limit") ?? "200", 10) || 200));
-
-  const sql = "SELECT * FROM messages" +
-    (where.length > 0 ? " WHERE " + where.join(" AND ") : "") +
-    " ORDER BY created_at DESC, id DESC LIMIT ?";
-  params.push(limit);
-  return json(db.prepare(sql).all(...params));
 }
 
 function handleDbStats(): Response {
@@ -348,16 +416,69 @@ async function handler(req: Request): Promise<Response> {
   if (req.method === "GET" && pathname === "/api/logs") {
     return await handleLogs(url);
   }
-  if (req.method === "GET" && pathname === "/api/db/messages") {
-    return handleDbMessages(url);
-  }
-  const dbCellEdit = pathname.match(/^\/api\/db\/messages\/([^/]+)$/);
-  if (req.method === "PATCH" && dbCellEdit) {
-    return await handleDbCellEdit(req, decodeURIComponent(dbCellEdit[1]));
-  }
   if (req.method === "GET" && pathname === "/api/db/stats") {
     return handleDbStats();
   }
+  if (req.method === "GET" && pathname === "/api/db/tables") {
+    return handleDbTables();
+  }
+  const dbRows = pathname.match(/^\/api\/db\/([^/]+)$/);
+  if (req.method === "GET" && dbRows) {
+    return handleDbRows(decodeURIComponent(dbRows[1]), url);
+  }
+  const dbCellEdit = pathname.match(/^\/api\/db\/([^/]+)\/([^/]+)$/);
+  if (req.method === "PATCH" && dbCellEdit) {
+    return await handleDbCellEdit(req, decodeURIComponent(dbCellEdit[1]), decodeURIComponent(dbCellEdit[2]));
+  }
+
+  // ---- Per-customer memory (spec §10): audit surface + erasure + simulation
+  if (req.method === "GET" && pathname === "/api/memory/customers") {
+    return json(listMemoryCustomers(db));
+  }
+  if (req.method === "GET" && pathname === "/api/memory") {
+    const customerId = (url.searchParams.get("customer") ?? "").trim();
+    if (customerId === "") return json({ error: "customer query param required" }, 400);
+    return json(listAllMemories(db, customerId));
+  }
+  if (req.method === "DELETE" && pathname === "/api/memory") {
+    const customerId = (url.searchParams.get("customer") ?? "").trim();
+    if (customerId === "") return json({ error: "customer query param required" }, 400);
+    const erased = eraseCustomerMemories(db, customerId);
+    logger.info("dev_ui_memories_erased", { customerId, erased });
+    return json({ erased });
+  }
+  const memoryArchive = pathname.match(/^\/api\/memory\/([^/]+)\/archive$/);
+  if (req.method === "POST" && memoryArchive) {
+    const body = await req.json().catch(() => ({}));
+    const customerId = typeof body.customerId === "string" ? body.customerId.trim() : "";
+    if (customerId === "") return json({ error: "customerId required" }, 400);
+    const archived = archiveMemory(db, customerId, decodeURIComponent(memoryArchive[1]));
+    if (archived) {
+      logger.info("dev_ui_memory_archived", {
+        customerId,
+        memoryId: decodeURIComponent(memoryArchive[1]),
+      });
+    }
+    return json({ archived });
+  }
+  const humanResolution = pathname.match(/^\/api\/threads\/([^/]+)\/human_resolution$/);
+  if (req.method === "POST" && humanResolution) {
+    const threadId = decodeURIComponent(humanResolution[1]);
+    const body = await req.json().catch(() => ({}));
+    const content = typeof body.content === "string" ? body.content.trim() : "";
+    if (content === "") return json({ error: "content required" }, 400);
+    const customerId = getThreadMessages(db, threadId)
+      .find((m) => m.customerId !== null)?.customerId ?? null;
+    const row = insertSystemMessage(db, {
+      threadId,
+      content,
+      customerId,
+      metadata: { type: "human_resolution", channel: "dev-ui" },
+    });
+    logger.info("dev_ui_human_resolution_inserted", { threadId, messageId: row.id, customerId });
+    return json({ id: row.id });
+  }
+
   return json({ error: "not found" }, 404);
 }
 

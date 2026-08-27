@@ -157,8 +157,43 @@
   }
   #viewToggle button.active { background: var(--panel-2); color: var(--text); }
 
-  #chatView, #dbView, #logsView { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-  #chatView[hidden], #dbView[hidden], #logsView[hidden] { display: none !important; }
+  #chatView, #dbView, #logsView, #memoryView { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  #chatView[hidden], #dbView[hidden], #logsView[hidden], #memoryView[hidden] { display: none !important; }
+
+  #memFilters {
+    display: flex; gap: 8px; align-items: center; padding: 8px 16px;
+    border-bottom: 1px solid var(--border); background: var(--panel); flex: none; flex-wrap: wrap;
+  }
+  #memFilters input {
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 8px; font: inherit; font-size: 12px;
+  }
+  #memFilters input:focus { outline: none; border-color: var(--accent); }
+  #memMeta { color: var(--muted); font-size: 12px; }
+  #memErase {
+    margin-left: auto; border: 1px solid color-mix(in srgb, var(--failed) 55%, transparent);
+    background: transparent; color: var(--failed); border-radius: 6px;
+    padding: 4px 12px; cursor: pointer; font-size: 12px; font-weight: 650;
+  }
+  #memErase:hover { background: color-mix(in srgb, var(--failed) 15%, transparent); }
+  #memTableWrap { flex: 1; overflow: auto; }
+  #memTable { border-collapse: collapse; font-size: 12px; min-width: 100%; }
+  #memTable th {
+    position: sticky; top: 0; background: var(--panel-2); color: var(--muted); text-align: left;
+    padding: 6px 10px; border-bottom: 1px solid var(--border); font-weight: 650; z-index: 1; font-size: 11px;
+  }
+  #memTable td { padding: 6px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  #memTable td.mem-content { max-width: 480px; overflow-wrap: anywhere; }
+  #memTable .inactive td { opacity: .45; }
+  .mem-kind { font-weight: 700; font-size: 11px; text-transform: uppercase; }
+  .mem-kind.fact { color: var(--processing); }
+  .mem-kind.playbook { color: var(--completed); }
+  .mem-kind.episode { color: var(--muted); }
+  .mem-archive {
+    border: 1px solid var(--border); background: transparent; color: var(--muted);
+    border-radius: 6px; padding: 2px 8px; cursor: pointer; font-size: 11px;
+  }
+  .mem-archive:hover { color: var(--text); border-color: var(--muted); }
 
   #logFilters {
     display: flex; gap: 8px; align-items: center; padding: 8px 16px;
@@ -204,6 +239,7 @@
   }
   #dbFilters select:focus, #dbFilters input:focus { outline: none; border-color: var(--accent); }
   #dbThread { width: 170px; }
+  #dbEq { width: 150px; }
   #dbFilters .pause { color: var(--muted); font-size: 12px; display: flex; gap: 5px; align-items: center; margin-left: auto; }
   #dbCount { color: var(--muted); font-size: 12px; }
   #dbTableWrap { flex: 1; overflow: auto; }
@@ -248,6 +284,7 @@
       <button type="button" data-view="chat" class="active">Conversations</button>
       <button type="button" data-view="db">Database</button>
       <button type="button" data-view="logs">Logs</button>
+      <button type="button" data-view="memory">Memory</button>
     </nav>
     <div id="conn"><span id="connDot"></span><span id="connText">connecting…</span></div>
   </header>
@@ -267,6 +304,7 @@
       <div id="threadHeader">
         <strong id="threadTitle">No thread selected</strong>
         <span class="hint" id="threadHint">Create a thread and send a message as the customer.</span>
+        <button type="button" id="threadResolution" class="thread-logs-btn" hidden title="Simulate the platform inserting a human resolution note (spec §3.2 item 4) — the summarizer distills it into a playbook memory">🤝 human resolution</button>
         <button type="button" id="threadLogs" class="thread-logs-btn" hidden title="Open the Logs view filtered to this thread">🪵 logs for this thread</button>
       </div>
       <div id="messages"><div class="empty">Nothing here yet.</div></div>
@@ -292,6 +330,7 @@
       <div id="dbView" hidden>
         <div id="dbBar"><span id="dbStats" class="mono">loading…</span></div>
         <div id="dbFilters">
+          <select id="dbTableSel" class="mono" title="Which table of the SQLite file to browse"></select>
           <select id="dbStatus" title="Filter by status">
             <option value="">all statuses</option>
             <option value="pending">pending</option>
@@ -306,6 +345,7 @@
             <option value="system">system</option>
           </select>
           <input id="dbThread" class="mono" placeholder="thread_id (exact)" spellcheck="false">
+          <input id="dbEq" class="mono" placeholder="column=value" spellcheck="false" title="Equality filter on any column of the selected table">
           <select id="dbLimit" title="Max rows">
             <option value="50">50 rows</option>
             <option value="200" selected>200 rows</option>
@@ -337,6 +377,17 @@
         </div>
         <div id="logList"></div>
       </div>
+
+      <div id="memoryView" hidden>
+        <div id="memFilters">
+          <label for="memCustomer" style="margin:0">customer</label>
+          <input id="memCustomer" class="mono" list="customerOptions" placeholder="customer id" spellcheck="false">
+          <label class="follow" style="margin-left:0" title="Include archived/superseded/expired entries"><input type="checkbox" id="memAll" checked> show inactive</label>
+          <span id="memMeta"></span>
+          <button type="button" id="memErase" title="Erasure contract (spec §10.6): hard-delete ALL memories for this customer, archived included">⚠ erase customer memories</button>
+        </div>
+        <div id="memTableWrap"><table id="memTable"></table></div>
+      </div>
     </main>
   </div>
 
@@ -353,24 +404,30 @@ const state = {
   draftThreads: new Set(),
   lastThreadsJson: "",
   lastMessagesJson: "",
-  db: { rows: [], stats: null, expanded: null, lastRowsJson: "", lastStatsJson: "", editing: null, clickTimer: null },
+  db: {
+    table: "messages",
+    tables: [],
+    lastTablesJson: "",
+    meta: null, // { pk, readOnly, columns } of the selected table, from the server
+    rows: [],
+    stats: null,
+    expanded: null,
+    lastRowsJson: "",
+    lastStatsJson: "",
+    editing: null,
+    clickTimer: null,
+  },
   expandedMessage: null,
   stampedIds: new Set(),
   failed: [],
   lastFailedJson: "",
   logs: { entries: [], lastJson: "", meta: "" },
+  memory: { records: [], lastJson: "", customer: "" },
 };
 
-const DB_COLUMNS = [
-  "id", "thread_id", "customer_id", "role", "content", "status", "in_reply_to",
-  "worker_id", "locked_at", "attempt_count", "error",
-  "model", "tokens_in", "tokens_out", "cost_usd", "metadata",
-  "sent_to_customer_at", "created_at", "completed_at",
-];
-const TS_COLUMNS = new Set(["locked_at", "sent_to_customer_at", "created_at", "completed_at"]);
-// Mirrors the server's editability rules (id = PK, NOT NULL per schema.sql).
-const DB_NON_EDITABLE = new Set(["id"]);
-const DB_NOT_NULL = new Set(["id", "thread_id", "role", "content", "status", "created_at"]);
+// Column metadata (name, type, notNull, pk) comes from the server per table;
+// *_at INTEGER columns are Unix-ms timestamps by schema convention.
+const isTsColumn = (col) => col.type.includes("INT") && col.name.endsWith("_at");
 
 async function api(path, opts) {
   const res = await fetch(path, opts);
@@ -633,6 +690,7 @@ function setView(view) {
   $("chatView").hidden = view !== "chat";
   $("dbView").hidden = view !== "db";
   $("logsView").hidden = view !== "logs";
+  $("memoryView").hidden = view !== "memory";
   for (const btn of document.querySelectorAll("#viewToggle button")) {
     btn.classList.toggle("active", btn.dataset.view === view);
   }
@@ -653,7 +711,7 @@ function renderDbStats() {
   if (!s) return;
   $("dbStats").textContent =
     s.databasePath + " · journal_mode=" + s.journalMode + " · " + fmtBytes(s.sizeBytes) +
-    " · " + s.total + " rows — " +
+    " · " + s.total + " message rows — " +
     s.byStatus.pending + " pending / " + s.byStatus.processing + " processing / " +
     s.byStatus.completed + " completed / " + s.byStatus.failed + " failed";
 }
@@ -664,7 +722,7 @@ function dbCell(row, col) {
     clearTimeout(state.db.clickTimer);
     beginCellEdit(row, col, td);
   };
-  const value = row[col];
+  const value = row[col.name];
   if (value === null || value === undefined) {
     const el = document.createElement("span");
     el.className = "null";
@@ -674,7 +732,7 @@ function dbCell(row, col) {
   }
   const text = String(value);
   td.textContent = text;
-  if (TS_COLUMNS.has(col) && typeof value === "number") {
+  if (isTsColumn(col) && typeof value === "number") {
     td.title = new Date(value).toISOString();
   } else if (text.length > 40) {
     td.title = text;
@@ -688,26 +746,33 @@ function dbCell(row, col) {
  * on nullable columns. Auto-refresh is suspended while an editor is open.
  */
 function beginCellEdit(row, col, td) {
-  if (DB_NON_EDITABLE.has(col)) {
-    toast("id is the primary key — not editable", "warn");
+  const meta = state.db.meta;
+  if (!meta) return;
+  if (meta.readOnly) {
+    toast(state.db.table + " has no single-column primary key — read-only", "warn");
+    return;
+  }
+  if (col.pk) {
+    toast(col.name + " is the primary key — not editable", "warn");
     return;
   }
   if (state.db.editing) return;
-  state.db.editing = { id: row.id, col };
+  const rowId = row[meta.pk];
+  state.db.editing = { id: rowId, col: col.name };
 
-  const original = row[col] === null || row[col] === undefined ? null : String(row[col]);
+  const original = row[col.name] === null || row[col.name] === undefined ? null : String(row[col.name]);
   const editor = document.createElement("textarea");
   editor.className = "cell-editor";
   editor.value = original ?? "";
   editor.rows = original !== null && (original.length > 60 || original.includes("\n")) ? 4 : 1;
-  editor.placeholder = DB_NOT_NULL.has(col) ? "" : "NULL";
-  editor.title = "Enter to save · Esc to cancel" + (DB_NOT_NULL.has(col) ? "" : " · empty saves NULL");
+  editor.placeholder = col.notNull ? "" : "NULL";
+  editor.title = "Enter to save · Esc to cancel" + (col.notNull ? "" : " · empty saves NULL");
   editor.spellcheck = false;
   editor.onclick = (e) => e.stopPropagation();
   editor.ondblclick = (e) => e.stopPropagation();
 
   let finished = false;
-  const typedValue = () => editor.value === "" && !DB_NOT_NULL.has(col) ? null : editor.value;
+  const typedValue = () => editor.value === "" && !col.notNull ? null : editor.value;
   const cancel = () => {
     if (finished) return;
     finished = true;
@@ -723,18 +788,21 @@ function beginCellEdit(row, col, td) {
     }
     finished = true;
     try {
-      await api("/api/db/messages/" + encodeURIComponent(row.id), {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ column: col, value }),
-      });
-      toast("Updated " + col + " ✓", "ok");
+      await api(
+        "/api/db/" + encodeURIComponent(state.db.table) + "/" + encodeURIComponent(rowId),
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ column: col.name, value }),
+        },
+      );
+      toast("Updated " + col.name + " ✓", "ok");
       state.db.editing = null;
       state.db.lastRowsJson = "";
       refresh();
     } catch (err) {
       finished = false; // keep the editor open so the value can be corrected
-      toast(col + ": " + err.message, "warn");
+      toast(col.name + ": " + err.message, "warn");
       editor.focus();
     }
   };
@@ -763,59 +831,99 @@ function beginCellEdit(row, col, td) {
 function renderDbTable() {
   const table = $("dbTable");
   table.textContent = "";
+  const meta = state.db.meta;
+  if (!meta) {
+    $("dbCount").textContent = "";
+    return;
+  }
 
   const thead = document.createElement("thead");
   const headRow = document.createElement("tr");
-  for (const col of DB_COLUMNS) {
+  for (const col of meta.columns) {
     const th = document.createElement("th");
-    th.textContent = col;
+    th.textContent = col.name;
     headRow.appendChild(th);
   }
   thead.appendChild(headRow);
   table.appendChild(thead);
 
   const tbody = document.createElement("tbody");
-  for (const row of state.db.rows) {
+  state.db.rows.forEach((row, idx) => {
+    const rowKey = meta.pk === null ? idx : row[meta.pk];
     const tr = document.createElement("tr");
     tr.className = "row";
-    for (const col of DB_COLUMNS) tr.appendChild(dbCell(row, col));
+    for (const col of meta.columns) tr.appendChild(dbCell(row, col));
     // Delayed so a double-click (edit) can cancel the pending expand toggle.
     tr.onclick = () => {
       clearTimeout(state.db.clickTimer);
       state.db.clickTimer = setTimeout(() => {
-        state.db.expanded = state.db.expanded === row.id ? null : row.id;
+        state.db.expanded = state.db.expanded === rowKey ? null : rowKey;
         renderDbTable();
       }, 250);
     };
     tbody.appendChild(tr);
 
-    if (state.db.expanded === row.id) {
+    if (state.db.expanded === rowKey) {
       const detail = document.createElement("tr");
       detail.className = "detail";
       const td = document.createElement("td");
-      td.colSpan = DB_COLUMNS.length;
+      td.colSpan = meta.columns.length;
       const pre = document.createElement("pre");
       pre.textContent = JSON.stringify(row, null, 2);
       td.appendChild(pre);
       detail.appendChild(td);
       tbody.appendChild(detail);
     }
-  }
+  });
   table.appendChild(tbody);
-  $("dbCount").textContent = state.db.rows.length + " shown";
+  $("dbCount").textContent = state.db.rows.length + " shown" + (meta.readOnly ? " · read-only" : "");
+}
+
+// The messages-specific filter controls only apply to the messages table.
+function updateDbControls() {
+  const isMessages = state.db.table === "messages";
+  $("dbStatus").hidden = !isMessages;
+  $("dbRole").hidden = !isMessages;
+  $("dbThread").hidden = !isMessages;
+}
+
+function renderDbTablesSel() {
+  const sel = $("dbTableSel");
+  const names = state.db.tables.map((t) => t.name);
+  if (names.length > 0 && !names.includes(state.db.table)) {
+    selectDbTable(names[0]);
+  }
+  if ([...sel.options].map((o) => o.value).join("\n") !== names.join("\n")) {
+    sel.textContent = "";
+    for (const name of names) {
+      const option = document.createElement("option");
+      option.value = name;
+      sel.appendChild(option);
+    }
+  }
+  [...sel.options].forEach((option, i) => {
+    option.textContent = state.db.tables[i].name + " (" + state.db.tables[i].rowCount + ")";
+  });
+  sel.value = state.db.table;
+}
+
+function selectDbTable(name) {
+  state.db.table = name;
+  state.db.meta = null;
+  state.db.rows = [];
+  state.db.expanded = null;
+  state.db.lastRowsJson = "";
+  $("dbEq").value = ""; // filters are per-table; a stale column would 400
+  updateDbControls();
+  renderDbTable();
 }
 
 async function refreshDb() {
   if ($("dbPause").checked || state.db.editing) return;
-  const params = new URLSearchParams();
-  if ($("dbStatus").value) params.set("status", $("dbStatus").value);
-  if ($("dbRole").value) params.set("role", $("dbRole").value);
-  if ($("dbThread").value.trim()) params.set("thread", $("dbThread").value.trim());
-  params.set("limit", $("dbLimit").value);
 
-  const [stats, rows] = await Promise.all([
+  const [stats, tables] = await Promise.all([
     api("/api/db/stats"),
-    api("/api/db/messages?" + params.toString()),
+    api("/api/db/tables"),
   ]);
   const statsJson = JSON.stringify(stats);
   if (statsJson !== state.db.lastStatsJson) {
@@ -823,20 +931,54 @@ async function refreshDb() {
     state.db.stats = stats;
     renderDbStats();
   }
-  const rowsJson = JSON.stringify(rows);
+  const tablesJson = JSON.stringify(tables);
+  if (tablesJson !== state.db.lastTablesJson) {
+    state.db.lastTablesJson = tablesJson;
+    state.db.tables = tables;
+    renderDbTablesSel();
+  }
+
+  const params = new URLSearchParams();
+  if (state.db.table === "messages") {
+    if ($("dbStatus").value) params.append("eq", "status:" + $("dbStatus").value);
+    if ($("dbRole").value) params.append("eq", "role:" + $("dbRole").value);
+    if ($("dbThread").value.trim()) params.append("eq", "thread_id:" + $("dbThread").value.trim());
+  }
+  const eqRaw = $("dbEq").value.trim();
+  if (eqRaw !== "" && eqRaw.includes("=")) {
+    const i = eqRaw.indexOf("=");
+    params.append("eq", eqRaw.slice(0, i).trim() + ":" + eqRaw.slice(i + 1).trim());
+  }
+  params.set("limit", $("dbLimit").value);
+
+  let res;
+  try {
+    res = await api("/api/db/" + encodeURIComponent(state.db.table) + "?" + params.toString());
+  } catch (err) {
+    // e.g. a bad column=value filter — keep the last rows, surface the reason.
+    $("dbCount").textContent = err.message;
+    return;
+  }
+  const rowsJson = JSON.stringify(res);
   if (rowsJson !== state.db.lastRowsJson) {
     state.db.lastRowsJson = rowsJson;
-    state.db.rows = rows;
+    state.db.meta = { pk: res.pk, readOnly: res.readOnly, columns: res.columns };
+    state.db.rows = res.rows;
     renderDbTable();
   }
 }
 
-for (const id of ["dbStatus", "dbRole", "dbThread", "dbLimit"]) {
+$("dbTableSel").addEventListener("input", () => {
+  selectDbTable($("dbTableSel").value);
+  refresh();
+});
+for (const id of ["dbStatus", "dbRole", "dbThread", "dbEq", "dbLimit"]) {
   $(id).addEventListener("input", () => {
     state.db.lastRowsJson = "";
     refresh();
   });
 }
+updateDbControls();
 
 function fmtLogTime(ts) {
   return typeof ts === "string" && ts.length >= 23 ? ts.slice(11, 23) : String(ts ?? "");
@@ -917,6 +1059,168 @@ for (const id of ["logSource", "logLevel", "logThread", "logSearch"]) {
     refresh();
   });
 }
+
+function fmtMemDate(ms) {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+function memoryStatus(m) {
+  if (m.archivedAt) return "archived";
+  if (m.supersededBy) return "superseded";
+  if (m.expiresAt && m.expiresAt <= Date.now()) return "expired";
+  return "active";
+}
+
+function renderMemory() {
+  const table = $("memTable");
+  table.textContent = "";
+  const records = $("memAll").checked
+    ? state.memory.records
+    : state.memory.records.filter((m) => memoryStatus(m) === "active");
+
+  if (!state.memory.customer) {
+    $("memMeta").textContent = "pick a customer";
+    return;
+  }
+  const active = state.memory.records.filter((m) => memoryStatus(m) === "active").length;
+  $("memMeta").textContent = records.length + " shown · " + active + " active";
+  if (records.length === 0) return;
+
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const col of ["kind", "provenance", "content", "source thread", "updated", "status", ""]) {
+    const th = document.createElement("th");
+    th.textContent = col;
+    headRow.appendChild(th);
+  }
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  for (const m of records) {
+    const status = memoryStatus(m);
+    const tr = document.createElement("tr");
+    if (status !== "active") tr.className = "inactive";
+
+    const kind = document.createElement("td");
+    const kindSpan = document.createElement("span");
+    kindSpan.className = "mem-kind " + m.kind;
+    kindSpan.textContent = m.kind;
+    kind.appendChild(kindSpan);
+    tr.appendChild(kind);
+
+    const prov = document.createElement("td");
+    prov.textContent = m.provenance;
+    prov.className = "mono";
+    tr.appendChild(prov);
+
+    const content = document.createElement("td");
+    content.className = "mem-content";
+    content.textContent = m.content;
+    content.title = m.id;
+    tr.appendChild(content);
+
+    const source = document.createElement("td");
+    source.className = "mono";
+    if (m.sourceThreadId) {
+      source.textContent = m.sourceThreadId;
+      source.style.cursor = "pointer";
+      source.title = "Open thread";
+      source.onclick = () => selectThread(m.sourceThreadId);
+    } else source.textContent = "—";
+    tr.appendChild(source);
+
+    const updated = document.createElement("td");
+    updated.textContent = fmtMemDate(m.updatedAt);
+    updated.className = "mono";
+    tr.appendChild(updated);
+
+    const st = document.createElement("td");
+    st.textContent = status;
+    tr.appendChild(st);
+
+    const actions = document.createElement("td");
+    if (status === "active") {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "mem-archive";
+      btn.textContent = "archive";
+      btn.onclick = async () => {
+        try {
+          await api("/api/memory/" + encodeURIComponent(m.id) + "/archive", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ customerId: state.memory.customer }),
+          });
+          toast("Memory archived", "ok");
+          state.memory.lastJson = "";
+          refresh();
+        } catch (err) {
+          toast("Archive failed: " + err.message, "warn");
+        }
+      };
+      actions.appendChild(btn);
+    }
+    tr.appendChild(actions);
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+}
+
+async function refreshMemory() {
+  const customer = $("memCustomer").value.trim();
+  state.memory.customer = customer;
+  if (!customer) {
+    state.memory.records = [];
+    state.memory.lastJson = "";
+    renderMemory();
+    return;
+  }
+  const records = await api("/api/memory?customer=" + encodeURIComponent(customer));
+  const recordsJson = JSON.stringify(records) + $("memAll").checked;
+  if (recordsJson === state.memory.lastJson) return;
+  state.memory.lastJson = recordsJson;
+  state.memory.records = records;
+  renderMemory();
+}
+
+for (const id of ["memCustomer", "memAll"]) {
+  $(id).addEventListener("input", () => {
+    state.memory.lastJson = "";
+    refresh();
+  });
+}
+
+$("memErase").onclick = async () => {
+  const customer = $("memCustomer").value.trim();
+  if (!customer) return toast("Pick a customer first", "warn");
+  if (!confirm("Hard-delete ALL memories for " + customer + " (archived included)? This is the spec §10.6 erasure operation.")) return;
+  try {
+    const res = await api("/api/memory?customer=" + encodeURIComponent(customer), { method: "DELETE" });
+    toast("Erased " + res.erased + " memories for " + customer, "ok");
+    state.memory.lastJson = "";
+    refresh();
+  } catch (err) {
+    toast("Erase failed: " + err.message, "warn");
+  }
+};
+
+$("threadResolution").onclick = async () => {
+  if (!state.active) return;
+  const content = prompt("Human resolution note for " + state.active + " (how did the human fix it?):");
+  if (!content || !content.trim()) return;
+  try {
+    await api("/api/threads/" + encodeURIComponent(state.active) + "/human_resolution", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: content.trim() }),
+    });
+    toast("Resolution note inserted — the summarizer will distill it into a playbook", "ok");
+    refresh();
+  } catch (err) {
+    toast("Failed: " + err.message, "warn");
+  }
+};
 
 $("threadLogs").onclick = () => {
   if (!state.active) return;
@@ -1003,6 +1307,7 @@ function clearActiveThread() {
   $("threadTitle").textContent = "No thread selected";
   $("threadHint").textContent = "Create a thread and send a message as the customer.";
   $("threadLogs").hidden = true;
+  $("threadResolution").hidden = true;
   renderMessages();
 }
 
@@ -1033,6 +1338,7 @@ function selectThread(id) {
   $("threadTitle").textContent = id;
   $("threadHint").textContent = "";
   $("threadLogs").hidden = false;
+  $("threadResolution").hidden = false;
   renderThreads();
   renderMessages();
   refresh();
@@ -1096,6 +1402,9 @@ async function refresh() {
     }
     if (state.view === "logs") {
       await refreshLogs();
+    }
+    if (state.view === "memory") {
+      await refreshMemory();
     }
     // Failure poll (spec §3.2): a real platform would poll idx_messages_failed
     // exactly like this, in every state of the UI.
