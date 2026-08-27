@@ -157,8 +157,36 @@
   }
   #viewToggle button.active { background: var(--panel-2); color: var(--text); }
 
-  #chatView, #dbView, #logsView, #memoryView { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-  #chatView[hidden], #dbView[hidden], #logsView[hidden], #memoryView[hidden] { display: none !important; }
+  #chatView, #dbView, #logsView, #memoryView, #configView { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  #chatView[hidden], #dbView[hidden], #logsView[hidden], #memoryView[hidden], #configView[hidden] { display: none !important; }
+
+  #configBar { padding: 7px 16px; border-bottom: 1px solid var(--border); background: var(--panel); color: var(--muted); font-size: 11px; flex: none; }
+  #configWrap { flex: 1; overflow: auto; padding: 14px 16px; }
+  .cfg-caveat { color: var(--muted); font-size: 12px; margin-bottom: 14px; max-width: 880px; }
+  .cfg-section { margin-bottom: 22px; }
+  .cfg-title {
+    color: var(--muted); font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px;
+  }
+  .cfg-table { border-collapse: collapse; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+  .cfg-table td {
+    padding: 4px 16px 4px 0; vertical-align: baseline;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  }
+  .cfg-table td.cfg-sec {
+    color: var(--muted); font-weight: 700; font-size: 10px; text-transform: uppercase;
+    letter-spacing: .04em; padding-top: 12px; border-bottom: none;
+  }
+  .cfg-table td.cfg-head {
+    color: var(--muted); font-weight: 700; font-size: 10px;
+    text-transform: uppercase; letter-spacing: .04em;
+  }
+  .cfg-var { font-weight: 650; }
+  .cfg-dim { color: var(--muted); }
+  .cfg-setval { font-weight: 650; }
+  .cfg-note { color: var(--muted); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 11px; }
+  .cfg-empty { color: var(--muted); opacity: .55; font-style: italic; }
+  .chip.notset { color: var(--muted); border-color: var(--border); background: transparent; }
 
   #memFilters {
     display: flex; gap: 8px; align-items: center; padding: 8px 16px;
@@ -285,6 +313,7 @@
       <button type="button" data-view="db">Database</button>
       <button type="button" data-view="logs">Logs</button>
       <button type="button" data-view="memory">Memory</button>
+      <button type="button" data-view="config">Config</button>
     </nav>
     <div id="conn"><span id="connDot"></span><span id="connText">connecting…</span></div>
   </header>
@@ -388,6 +417,21 @@
         </div>
         <div id="memTableWrap"><table id="memTable"></table></div>
       </div>
+
+      <div id="configView" hidden>
+        <div id="configBar"><span id="configEnvStatus" class="mono">loading…</span></div>
+        <div id="configWrap">
+          <div class="cfg-caveat">
+            Defaults for every configuration option, with <b>actual</b> filled from parsing
+            <span class="mono">.env</span> as text — the harness never loads these into its own
+            environment. API keys are shown as configured / not configured only; their values
+            never leave the server.
+          </div>
+          <div class="cfg-section" id="cfgVars"></div>
+          <div class="cfg-section" id="cfgKeys"></div>
+          <div class="cfg-section" id="cfgExtras" hidden></div>
+        </div>
+      </div>
     </main>
   </div>
 
@@ -423,6 +467,7 @@ const state = {
   lastFailedJson: "",
   logs: { entries: [], lastJson: "", meta: "" },
   memory: { records: [], lastJson: "", customer: "" },
+  config: { data: null, lastJson: "" },
 };
 
 // Column metadata (name, type, notNull, pk) comes from the server per table;
@@ -691,6 +736,7 @@ function setView(view) {
   $("dbView").hidden = view !== "db";
   $("logsView").hidden = view !== "logs";
   $("memoryView").hidden = view !== "memory";
+  $("configView").hidden = view !== "config";
   for (const btn of document.querySelectorAll("#viewToggle button")) {
     btn.classList.toggle("active", btn.dataset.view === view);
   }
@@ -1060,6 +1106,138 @@ for (const id of ["logSource", "logLevel", "logThread", "logSearch"]) {
   });
 }
 
+function cfgChip(cls, text) {
+  const el = document.createElement("span");
+  el.className = "chip " + cls;
+  el.textContent = text;
+  return el;
+}
+
+function cfgValue(v) {
+  const el = document.createElement("span");
+  if (v === "") {
+    el.className = "cfg-empty";
+    el.textContent = "(empty)";
+  } else {
+    el.textContent = v;
+  }
+  return el;
+}
+
+function cfgDash() {
+  const el = document.createElement("span");
+  el.className = "cfg-empty";
+  el.textContent = "—";
+  return el;
+}
+
+function cfgSection(container, title) {
+  container.textContent = "";
+  const h = document.createElement("div");
+  h.className = "cfg-title";
+  h.textContent = title;
+  container.appendChild(h);
+  const table = document.createElement("table");
+  table.className = "cfg-table";
+  container.appendChild(table);
+  return table;
+}
+
+function renderConfig() {
+  const d = state.config.data;
+  if (!d) return;
+
+  $("configEnvStatus").textContent = d.envFile.error
+    ? d.envFile.error
+    : d.envFile.found
+    ? d.envFile.path + " · " + d.envFile.count + " entr" + (d.envFile.count === 1 ? "y" : "ies") + " parsed"
+    : d.envFile.path + " not found — every option is on its default";
+
+  const vars = cfgSection($("cfgVars"), "configuration — default vs .env");
+  const head = document.createElement("tr");
+  for (const label of ["variable", "default", "actual (.env)", ""]) {
+    const td = document.createElement("td");
+    td.className = "cfg-head";
+    td.textContent = label;
+    head.appendChild(td);
+  }
+  vars.appendChild(head);
+  let section = null;
+  for (const row of d.vars) {
+    if (row.section !== section) {
+      section = row.section;
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 4;
+      td.className = "cfg-sec";
+      td.textContent = section;
+      tr.appendChild(td);
+      vars.appendChild(tr);
+    }
+    const tr = document.createElement("tr");
+    const name = document.createElement("td");
+    name.className = "cfg-var";
+    name.textContent = row.env;
+    const def = document.createElement("td");
+    def.className = "cfg-dim";
+    def.appendChild(cfgValue(row.default));
+    const act = document.createElement("td");
+    if (row.actual === null) {
+      act.appendChild(cfgDash());
+    } else {
+      const v = cfgValue(row.actual);
+      v.classList.add("cfg-setval");
+      act.appendChild(v);
+    }
+    const note = document.createElement("td");
+    note.className = "cfg-note";
+    note.textContent = row.note || "";
+    tr.append(name, def, act, note);
+    vars.appendChild(tr);
+  }
+
+  const keys = cfgSection($("cfgKeys"), "API keys — presence only, values never shown");
+  for (const row of d.keys) {
+    const tr = document.createElement("tr");
+    const name = document.createElement("td");
+    name.className = "cfg-var";
+    name.textContent = row.env;
+    const status = document.createElement("td");
+    status.appendChild(row.set ? cfgChip("completed", "configured") : cfgChip("notset", "not configured"));
+    const note = document.createElement("td");
+    note.className = "cfg-note";
+    note.textContent = "provider: " + row.provider +
+      (row.active ? " · the one LLM_PROVIDER needs when AGENT_MODE=llm" : "");
+    tr.append(name, status, note);
+    keys.appendChild(tr);
+  }
+
+  $("cfgExtras").hidden = d.extras.length === 0;
+  if (d.extras.length > 0) {
+    const extras = cfgSection($("cfgExtras"), "other entries in .env — not a known config variable (typo?)");
+    for (const row of d.extras) {
+      const tr = document.createElement("tr");
+      const name = document.createElement("td");
+      name.className = "cfg-var";
+      name.textContent = row.name;
+      const val = document.createElement("td");
+      if (row.secret) val.appendChild(cfgChip("completed", "set"));
+      else val.appendChild(cfgValue(row.value));
+      tr.append(name, val);
+      extras.appendChild(tr);
+    }
+  }
+}
+
+async function refreshConfig() {
+  const res = await api("/api/config");
+  const resJson = JSON.stringify(res);
+  if (resJson === state.config.lastJson) return;
+  state.config.lastJson = resJson;
+  state.config.data = res;
+  renderConfig();
+}
+
 function fmtMemDate(ms) {
   return new Date(ms).toISOString().slice(0, 10);
 }
@@ -1405,6 +1583,9 @@ async function refresh() {
     }
     if (state.view === "memory") {
       await refreshMemory();
+    }
+    if (state.view === "config") {
+      await refreshConfig();
     }
     // Failure poll (spec §3.2): a real platform would poll idx_messages_failed
     // exactly like this, in every state of the UI.

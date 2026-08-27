@@ -107,12 +107,13 @@ Memory facts saved during runs are always recorded as **customer-stated claims**
 
 ## The dev harness
 
-`tools/ui/` simulates the **external support platform** (which is out of scope for the core — the `messages` table is the integration contract, spec §3.2). It runs as a separate process sharing the SQLite file, exactly like a real co-located adapter would. Four views:
+`tools/ui/` simulates the **external support platform** (which is out of scope for the core — the `messages` table is the integration contract, spec §3.2). It runs as a separate process sharing the SQLite file, exactly like a real co-located adapter would. Five views:
 
 - **Conversations** — send messages as a customer picked from the CRM directory (optionally pin an external message id and hit "↻ redeliver" to watch webhook-redelivery dedup do nothing). Completed replies are auto-stamped `sent_to_customer_at` when rendered, with a delivered tick, reply link, escalation badge, and model · tokens · cost chip. Click any bubble for its full technical record; threads can be deleted. Per-thread actions: "🤝 human resolution" inserts a platform resolution note (spec §3.2 item 4 — the summarizer distills it into a playbook) and "🪵 logs for this thread" jumps to the filtered Logs view. A **⚠ Failed messages** panel appears when messages exhaust retries — "Route to human" acknowledges them.
 - **Database** — a raw browser/editor over **any table in the SQLite file** (`messages`, `memories`, …): row counts, equality filters, and in-place cell editing that respects column types and the engine's enum vocabularies (tables without a single-column primary key are read-only).
 - **Logs** — tails `engine.log` / `dev-ui.log` with level/text/thread filters and follow mode; memory, connector, and summarizer events (`memory_saved`, `connector_request`, `thread_summarized`, …) all show up here.
 - **Memory** — the audit surface for per-customer memory: every entry with kind, provenance, dates, source thread, and status (active/superseded/expired/archived); archive individual entries or run the spec §10.6 **erase-customer** operation.
+- **Config** — every configuration option's default next to the **actual** value from `.env`, which the harness parses as text (it never loads the file into its environment). API keys appear as configured / not configured only — values never leave the server. Entries in `.env` that match no known variable are listed separately, so typos surface.
 
 ## Testing & development
 

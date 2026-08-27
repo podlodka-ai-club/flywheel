@@ -25,6 +25,7 @@ import {
   listAllMemories,
   listMemoryCustomers,
 } from "../../src/memory/store.ts";
+import { parseEnvFile } from "./env_file.ts";
 
 configureLogging({ name: "dev-ui" });
 const db = openDb(config.databasePath);
@@ -358,6 +359,103 @@ async function handleLogs(url: URL): Promise<Response> {
   return json({ entries, sizeBytes, missing: false, path });
 }
 
+// ---- Config view: every config option's default next to what the .env file
+// ---- sets. The file is parsed as TEXT for display only — never loaded into
+// ---- this process's environment. API keys are reported presence-only.
+
+const ENV_FILE_PATH = "./.env";
+
+// Anything credential-shaped is masked by NAME, so no fixed list can miss one.
+const SECRET_ENV_RE = /API_KEY|SECRET|TOKEN|PASSWORD/i;
+
+// Mirrors PROVIDER_KEY_ENVS in src/agent/harness.ts — not imported, because
+// pulling the pi SDK into this process would break dev:ui's strict --allow-env.
+const PROVIDER_KEY_ENVS: Record<string, string> = {
+  openrouter: "OPENROUTER_API_KEY",
+  google: "GEMINI_API_KEY",
+  openai: "OPENAI_API_KEY",
+  anthropic: "ANTHROPIC_API_KEY",
+};
+
+// Every config var with its default as a display string. Kept in sync with
+// loadConfig() in src/config.ts and the README env tables.
+const CONFIG_VARS: { env: string; default: string; section: string; note?: string }[] = [
+  { env: "AGENT_MODE", default: "llm", section: "LLM & agent", note: "echo = deterministic replies, no key needed" },
+  { env: "LLM_PROVIDER", default: "openrouter", section: "LLM & agent" },
+  { env: "LLM_MODEL", default: "", section: "LLM & agent", note: "empty = the provider's default model" },
+  { env: "LLM_THINKING", default: "off", section: "LLM & agent", note: "auto-clamped per model at runtime" },
+  { env: "MEMORY_ENABLED", default: "1", section: "Memory" },
+  { env: "SUMMARIZE_AFTER_MS", default: "86400000", section: "Memory", note: "idle time before a terminal thread summarizes" },
+  { env: "SUMMARIZER_PROVIDER", default: "", section: "Memory", note: "empty = inherit the agent's" },
+  { env: "SUMMARIZER_MODEL", default: "", section: "Memory", note: "empty = inherit the agent's" },
+  { env: "MEMORY_HYDRATION_BUDGET", default: "1200", section: "Memory", note: "approx. tokens of memories in the system prompt" },
+  { env: "MEMORY_RUN_WRITE_CAP", default: "3", section: "Memory", note: "max memory writes per agent run" },
+  { env: "MEMORY_ACTIVE_CAP", default: "200", section: "Memory", note: "max active memories per customer" },
+  { env: "DATABASE_PATH", default: "./data/support.db", section: "Queue & engine" },
+  { env: "WORKER_CONCURRENCY", default: "2", section: "Queue & engine" },
+  { env: "POLL_INTERVAL_MS", default: "500", section: "Queue & engine" },
+  { env: "LOCK_TIMEOUT_MS", default: "600000", section: "Queue & engine", note: "lease lifetime; set above worst-case agent runtime" },
+  { env: "MAX_RETRIES", default: "3", section: "Queue & engine" },
+  { env: "REAPER_INTERVAL_MS", default: "5000", section: "Queue & engine", note: "auto-clamped to ≤ half the lease" },
+  { env: "LOG_LEVEL", default: "info", section: "Logging" },
+  { env: "LOG_DIR", default: "./data/logs", section: "Logging" },
+  { env: "LOG_MAX_BYTES", default: "5242880", section: "Logging", note: "rotation threshold per file" },
+  { env: "LOG_BACKUP_COUNT", default: "3", section: "Logging" },
+  { env: "DEV_UI_PORT", default: "8787", section: "Dev harness", note: "PORT (e.g. from a preview runner) wins over it" },
+  { env: "DEV_FAULTS", default: "0", section: "Dev harness", note: "[[sleep]]/[[fail]] markers, echo mode only" },
+];
+
+async function handleConfig(): Promise<Response> {
+  let entries: Map<string, string> | null = null;
+  let envError: string | null = null;
+  try {
+    entries = parseEnvFile(await Deno.readTextFile(ENV_FILE_PATH));
+  } catch (err) {
+    if (!(err instanceof Deno.errors.NotFound)) {
+      envError = "cannot read ./.env — is it in dev:ui --allow-read (deno.json)?";
+    }
+  }
+
+  const vars = CONFIG_VARS.map(({ env, default: def, section, note }) => ({
+    env,
+    section,
+    note: note ?? null,
+    default: def,
+    actual: entries?.get(env) ?? null,
+  }));
+
+  // Which provider key the configured (or default) LLM_PROVIDER needs.
+  const provider = entries?.get("LLM_PROVIDER") ?? "openrouter";
+  const activeKeyEnv = PROVIDER_KEY_ENVS[provider] ??
+    `${provider.toUpperCase().replaceAll("-", "_")}_API_KEY`;
+  const keyEnvs = new Map<string, string>();
+  for (const [p, env] of Object.entries(PROVIDER_KEY_ENVS)) keyEnvs.set(env, p);
+  if (!keyEnvs.has(activeKeyEnv)) keyEnvs.set(activeKeyEnv, provider);
+  const keys = [...keyEnvs].map(([env, p]) => ({
+    env,
+    provider: p,
+    active: env === activeKeyEnv,
+    set: (entries?.get(env) ?? "") !== "",
+  }));
+
+  // Entries in .env that match no known variable — typos surface here.
+  // Credential-looking names stay presence-only.
+  const known = new Set([...CONFIG_VARS.map((v) => v.env), ...keyEnvs.keys()]);
+  const extras = [...(entries ?? [])]
+    .filter(([name]) => !known.has(name))
+    .map(([name, value]) => {
+      const secret = SECRET_ENV_RE.test(name);
+      return { name, secret, value: secret ? null : value };
+    });
+
+  return json({
+    envFile: { path: ENV_FILE_PATH, found: entries !== null, count: entries?.size ?? 0, error: envError },
+    vars,
+    keys,
+    extras,
+  });
+}
+
 async function handler(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const { pathname } = url;
@@ -415,6 +513,9 @@ async function handler(req: Request): Promise<Response> {
   }
   if (req.method === "GET" && pathname === "/api/logs") {
     return await handleLogs(url);
+  }
+  if (req.method === "GET" && pathname === "/api/config") {
+    return await handleConfig();
   }
   if (req.method === "GET" && pathname === "/api/db/stats") {
     return handleDbStats();
