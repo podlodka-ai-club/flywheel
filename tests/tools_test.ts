@@ -74,10 +74,31 @@ Deno.test("customer-scoped tools fail without a verified identity or CRM record"
   );
 });
 
-Deno.test("escalate_to_human records the escalation on the run context", async () => {
+Deno.test("escalate_to_human calls the ticketing connector and records the escalation + reference", async () => {
   const context = makeContext("google");
   const result = await tool(context, "escalate_to_human")
     .execute("tc1", { reason: "customer requests refund" }, undefined, undefined);
-  assertEquals(context.escalation, { escalated: true, reason: "customer requests refund" });
-  assertStringIncludes(resultText(result), "specialist will follow up");
+  assertEquals(context.escalation.escalated, true);
+  assertEquals(context.escalation.reason, "customer requests refund");
+  // The mocked outbound ticketing call acknowledged with a platform reference.
+  assert(/^esc_[0-9a-f]{8}$/.test(context.escalation.externalReference ?? ""));
+  const text = resultText(result);
+  assertStringIncludes(text, "specialist will follow up");
+  assertStringIncludes(text, context.escalation.externalReference ?? "");
+});
+
+Deno.test("escalate_to_human surfaces a rejected ticketing call as a tool error", async () => {
+  const context = makeContext("google");
+  context.connectors = {
+    ...context.connectors,
+    ticketing: {
+      escalateTicket: () => Promise.resolve({ accepted: false, externalReference: "" }),
+    },
+  };
+  await assertRejects(
+    () => tool(context, "escalate_to_human").execute("tc1", { reason: "r" }, undefined, undefined),
+    Error,
+    "did not accept",
+  );
+  assertEquals(context.escalation.escalated, false);
 });

@@ -51,6 +51,9 @@
   #threads .t-head { display: flex; align-items: center; gap: 6px; }
   #threads .t-id { font-weight: 650; }
   #threads .t-time { margin-left: auto; color: var(--muted); font-size: 11px; }
+  #threads .t-x { flex: none; margin-left: 4px; border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 13px; line-height: 1; padding: 1px 5px; border-radius: 4px; visibility: hidden; }
+  #threads li:hover .t-x { visibility: visible; }
+  #threads .t-x:hover { color: #fff; background: var(--failed); }
   #threads .t-snippet {
     color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden;
     text-overflow: ellipsis; margin-top: 2px;
@@ -218,6 +221,14 @@
   #dbTable .null { color: var(--muted); opacity: .55; font-style: italic; }
   #dbTable tr.detail td { background: var(--bg); white-space: pre-wrap; overflow-wrap: anywhere; max-width: none; }
   #dbTable tr.detail pre { font: inherit; }
+  #dbTable td.editing { padding: 2px; max-width: none; overflow: visible; }
+  .cell-editor {
+    display: block; width: 100%; min-width: 220px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--accent); border-radius: 4px; padding: 4px 8px;
+    font: inherit; resize: both;
+  }
+  .cell-editor:focus { outline: none; }
+  #dbHint { color: var(--muted); font-size: 11px; }
 
   #toast {
     position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
@@ -301,6 +312,7 @@
             <option value="1000">1000 rows</option>
           </select>
           <span id="dbCount"></span>
+          <span id="dbHint">double-click a cell to edit · Enter saves · Esc cancels · empty ⇒ NULL</span>
           <label class="pause" title="Freeze auto-refresh while inspecting"><input type="checkbox" id="dbPause"> pause refresh</label>
         </div>
         <div id="dbTableWrap"><table id="dbTable"></table></div>
@@ -341,7 +353,7 @@ const state = {
   draftThreads: new Set(),
   lastThreadsJson: "",
   lastMessagesJson: "",
-  db: { rows: [], stats: null, expanded: null, lastRowsJson: "", lastStatsJson: "" },
+  db: { rows: [], stats: null, expanded: null, lastRowsJson: "", lastStatsJson: "", editing: null, clickTimer: null },
   expandedMessage: null,
   stampedIds: new Set(),
   failed: [],
@@ -356,6 +368,9 @@ const DB_COLUMNS = [
   "sent_to_customer_at", "created_at", "completed_at",
 ];
 const TS_COLUMNS = new Set(["locked_at", "sent_to_customer_at", "created_at", "completed_at"]);
+// Mirrors the server's editability rules (id = PK, NOT NULL per schema.sql).
+const DB_NON_EDITABLE = new Set(["id"]);
+const DB_NOT_NULL = new Set(["id", "thread_id", "role", "content", "status", "created_at"]);
 
 async function api(path, opts) {
   const res = await fetch(path, opts);
@@ -413,7 +428,15 @@ function renderThreads() {
     const tid = document.createElement("span");
     tid.className = "t-id mono";
     tid.textContent = id;
-    head.appendChild(tid);
+    const x = threadX("Discard this draft");
+    x.style.marginLeft = "auto";
+    x.onclick = (e) => {
+      e.stopPropagation();
+      state.draftThreads.delete(id);
+      if (state.active === id) clearActiveThread();
+      renderThreads();
+    };
+    head.append(tid, x);
     li.appendChild(head);
     const snippet = document.createElement("div");
     snippet.className = "t-snippet";
@@ -435,7 +458,12 @@ function renderThreads() {
     const time = document.createElement("span");
     time.className = "t-time";
     time.textContent = fmtAgo(t.lastActivityAt);
-    head.append(tid, time);
+    const x = threadX("Delete this thread (removes its rows from the database)");
+    x.onclick = (e) => {
+      e.stopPropagation();
+      removeThread(t);
+    };
+    head.append(tid, time, x);
     li.appendChild(head);
 
     const snippet = document.createElement("div");
@@ -632,6 +660,10 @@ function renderDbStats() {
 
 function dbCell(row, col) {
   const td = document.createElement("td");
+  td.ondblclick = () => {
+    clearTimeout(state.db.clickTimer);
+    beginCellEdit(row, col, td);
+  };
   const value = row[col];
   if (value === null || value === undefined) {
     const el = document.createElement("span");
@@ -648,6 +680,84 @@ function dbCell(row, col) {
     td.title = text;
   }
   return td;
+}
+
+/**
+ * Inline cell editor: swaps the <td> content for a textarea. Enter saves,
+ * Esc cancels, blur saves only if the value changed. Empty input saves NULL
+ * on nullable columns. Auto-refresh is suspended while an editor is open.
+ */
+function beginCellEdit(row, col, td) {
+  if (DB_NON_EDITABLE.has(col)) {
+    toast("id is the primary key — not editable", "warn");
+    return;
+  }
+  if (state.db.editing) return;
+  state.db.editing = { id: row.id, col };
+
+  const original = row[col] === null || row[col] === undefined ? null : String(row[col]);
+  const editor = document.createElement("textarea");
+  editor.className = "cell-editor";
+  editor.value = original ?? "";
+  editor.rows = original !== null && (original.length > 60 || original.includes("\n")) ? 4 : 1;
+  editor.placeholder = DB_NOT_NULL.has(col) ? "" : "NULL";
+  editor.title = "Enter to save · Esc to cancel" + (DB_NOT_NULL.has(col) ? "" : " · empty saves NULL");
+  editor.spellcheck = false;
+  editor.onclick = (e) => e.stopPropagation();
+  editor.ondblclick = (e) => e.stopPropagation();
+
+  let finished = false;
+  const typedValue = () => editor.value === "" && !DB_NOT_NULL.has(col) ? null : editor.value;
+  const cancel = () => {
+    if (finished) return;
+    finished = true;
+    state.db.editing = null;
+    renderDbTable();
+  };
+  const commit = async () => {
+    if (finished) return;
+    const value = typedValue();
+    if (value === original) {
+      cancel();
+      return;
+    }
+    finished = true;
+    try {
+      await api("/api/db/messages/" + encodeURIComponent(row.id), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ column: col, value }),
+      });
+      toast("Updated " + col + " ✓", "ok");
+      state.db.editing = null;
+      state.db.lastRowsJson = "";
+      refresh();
+    } catch (err) {
+      finished = false; // keep the editor open so the value can be corrected
+      toast(col + ": " + err.message, "warn");
+      editor.focus();
+    }
+  };
+
+  editor.onkeydown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      commit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      cancel();
+    }
+  };
+  editor.onblur = () => {
+    if (typedValue() === original) cancel();
+    else commit();
+  };
+
+  td.classList.add("editing");
+  td.textContent = "";
+  td.appendChild(editor);
+  editor.focus();
+  editor.select();
 }
 
 function renderDbTable() {
@@ -669,9 +779,13 @@ function renderDbTable() {
     const tr = document.createElement("tr");
     tr.className = "row";
     for (const col of DB_COLUMNS) tr.appendChild(dbCell(row, col));
+    // Delayed so a double-click (edit) can cancel the pending expand toggle.
     tr.onclick = () => {
-      state.db.expanded = state.db.expanded === row.id ? null : row.id;
-      renderDbTable();
+      clearTimeout(state.db.clickTimer);
+      state.db.clickTimer = setTimeout(() => {
+        state.db.expanded = state.db.expanded === row.id ? null : row.id;
+        renderDbTable();
+      }, 250);
     };
     tbody.appendChild(tr);
 
@@ -692,7 +806,7 @@ function renderDbTable() {
 }
 
 async function refreshDb() {
-  if ($("dbPause").checked) return;
+  if ($("dbPause").checked || state.db.editing) return;
   const params = new URLSearchParams();
   if ($("dbStatus").value) params.set("status", $("dbStatus").value);
   if ($("dbRole").value) params.set("role", $("dbRole").value);
@@ -870,6 +984,44 @@ function renderFailed() {
     actions.append(attempts, route);
     li.appendChild(actions);
     list.appendChild(li);
+  }
+}
+
+function threadX(title) {
+  const x = document.createElement("button");
+  x.type = "button";
+  x.className = "t-x";
+  x.textContent = "×";
+  x.title = title;
+  return x;
+}
+
+function clearActiveThread() {
+  state.active = null;
+  state.messages = [];
+  state.lastMessagesJson = "";
+  $("threadTitle").textContent = "No thread selected";
+  $("threadHint").textContent = "Create a thread and send a message as the customer.";
+  $("threadLogs").hidden = true;
+  renderMessages();
+}
+
+async function removeThread(t) {
+  const n = t.messageCount;
+  const ok = confirm(
+    "Delete thread " + t.threadId + " and its " + n + " message row" + (n === 1 ? "" : "s") +
+      " from the shared database?",
+  );
+  if (!ok) return;
+  try {
+    const res = await api("/api/threads/" + encodeURIComponent(t.threadId), { method: "DELETE" });
+    state.draftThreads.delete(t.threadId);
+    if (state.active === t.threadId) clearActiveThread();
+    toast("Deleted " + t.threadId + " (" + res.deleted + " rows) ✓", "ok");
+    state.lastThreadsJson = "";
+    refresh();
+  } catch (err) {
+    toast("Delete failed: " + err.message, "warn");
   }
 }
 

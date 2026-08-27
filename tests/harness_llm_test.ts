@@ -264,7 +264,11 @@ Deno.test("tool loop e2e: escalation flag lands on reply metadata; KB result rea
   });
 
   assertEquals(reply.content, "A specialist will follow up shortly about your billing question.");
-  assertEquals(reply.metadata, { escalated: true, escalation_reason: "billing action required" });
+  const metadata = reply.metadata as Record<string, unknown>;
+  assertEquals(metadata.escalated, true);
+  assertEquals(metadata.escalation_reason, "billing action required");
+  // The mocked ticketing call's reference rides along for platform correlation.
+  assert(/^esc_[0-9a-f]{8}$/.test(String(metadata.escalation_reference)));
   // The KB article text made it into the tool results the model saw.
   assertStringIncludes(toolResultSeen, "Exporting data to CSV");
 });

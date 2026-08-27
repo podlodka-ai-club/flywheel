@@ -1,6 +1,6 @@
 # Implementation Milestones
 
-Milestones M1–M8 (plus the M3.5 logging addendum), each ending in something runnable that you verify by hand before we continue. Milestones 1–3 require **no LLM API key**: the engine runs with a deterministic echo agent so all queue mechanics can be exercised for free. The real agent arrives in Milestone 4; M7 adds per-customer memory and self-learning; M8 adds the leak-proofed shared knowledge layer.
+Milestones M1–M8 (plus the M3.5 logging addendum), each ending in something runnable that you verify by hand before we continue. **Execution order: M1 → M5, then M7 (memory), then M6 (hardening), then M8 (shared knowledge)** — M6 and M7 are deliberately swapped so the hardening pass covers the memory subsystem; the numbers stay stable as identifiers. Milestones 1–3 require **no LLM API key**: the engine runs with a deterministic echo agent so all queue mechanics can be exercised for free. The real agent arrives in Milestone 4.
 
 Testing happens through a **dev web harness** (`tools/ui/`) that simulates the external support platform — ingest and dispatcher — which is out of scope for the core per [specification.md](specification.md) §3.2. It is a separate Deno process from the engine, sharing the SQLite file just like a real co-located adapter would, so every test session also exercises the multi-process WAL contract. No frontend framework, no build step: one `Deno.serve` server with a thin JSON API over the data-access layer, serving a single static HTML page (vanilla JS, ~1s polling).
 
@@ -142,7 +142,7 @@ Your testing loop: `deno task start` (engine) in one terminal, `deno task dev:ui
   - `search_knowledge_base(query, limit?)` — documentation search (wiki/Confluence/Notion stand-in)
   - `lookup_customer_account()` — CRM record; **no id parameter, hard-bound to the verified customer**
   - `lookup_customer_setup()` — deployment state (version, environment, dependencies, known issues); same hard binding
-  - `escalate_to_human(reason)` — records the escalation; the harness stamps `metadata.escalated` + `escalation_reason` on the reply row (spec §3.2 contract)
+  - `escalate_to_human(reason)` — makes an outbound state-change call via the mocked `TicketingConnector` (later: the real ticketing-platform API); on an accepted ack the reply row gets `metadata.escalated` + `escalation_reason` + `escalation_reference` (spec §3.2 contract)
 - System prompt rewritten for tool use: ground every claim in tool results, check the customer's actual version before upgrade advice, never act on account claims in message text
 - Harness UI: fixture-customer picker on the composer (datalist via `/api/customers`); **⚠ escalated** badge with reason on escalated replies; `tool_executed`/`tool_failed`/`connector_request` events in the Logs view
 
@@ -156,27 +156,9 @@ Your testing loop: `deno task start` (engine) in one terminal, `deno task dev:ui
 
 ---
 
-## M6 — Hardening & operations
-
-**Goal:** production posture — clean shutdown, locked-down permissions, maintenance, docs, and a full end-to-end suite.
-
-**Build:**
-- Graceful shutdown: on SIGINT/SIGTERM stop claiming, finish or release in-flight work, exit
-- Hourly `wal_checkpoint(TRUNCATE)` maintenance task (spec §9.2)
-- `deno task start` runs under the exact least-privilege permission set from spec §9.1 (the dev harness keeps its own dev-only permissions and is never deployed with the engine)
-- README run book: all tasks, env vars, the table contract for future adapter authors, and the harness guide
-- End-to-end test covering the full lifecycle including failure and escalation paths
-
-**You verify:**
-1. Ctrl-C mid-conversation → no rows stuck in `processing`; restart resumes cleanly.
-2. The engine fails fast with clear errors when env/permissions are missing.
-3. `deno task test` is green across the entire suite.
-
----
-
 ## M7 — Per-customer memory & self-learning
 
-**Goal:** the agent accumulates knowledge per customer account — durable facts, ticket episodes, and playbooks learned from human resolutions — with hard isolation between customers and explicit poisoning resistance. Full design: spec §10. Runs after M6; no hard dependency on it.
+**Goal:** the agent accumulates knowledge per customer account — durable facts, ticket episodes, and playbooks learned from human resolutions — with hard isolation between customers and explicit poisoning resistance. Full design: spec §10. **Runs before M6** (order swapped by decision — memory numbers stay stable identifiers): building memory first means M6's hardening and end-to-end pass covers the memory subsystem too.
 
 **Build:**
 - `memories` table + indexes per spec §10.2 (`fact` / `episode` / `playbook`, provenance, supersede chain, soft-archive; additive migration)
@@ -201,9 +183,27 @@ Your testing loop: `deno task start` (engine) in one terminal, `deno task dev:ui
 
 ---
 
+## M6 — Hardening & operations
+
+**Goal:** production posture — clean shutdown, locked-down permissions, maintenance, docs, and a full end-to-end suite. **Runs after M7**, so the hardening pass and E2E suite cover the memory subsystem as well.
+
+**Build:**
+- Graceful shutdown: on SIGINT/SIGTERM stop claiming, finish or release in-flight work, exit
+- Hourly `wal_checkpoint(TRUNCATE)` maintenance task (spec §9.2)
+- `deno task start` runs under the exact least-privilege permission set from spec §9.1 (the dev harness keeps its own dev-only permissions and is never deployed with the engine)
+- README run book: all tasks, env vars, the table contract for future adapter authors, and the harness guide
+- End-to-end test covering the full lifecycle including failure and escalation paths
+
+**You verify:**
+1. Ctrl-C mid-conversation → no rows stuck in `processing`; restart resumes cleanly.
+2. The engine fails fast with clear errors when env/permissions are missing.
+3. `deno task test` is green across the entire suite.
+
+---
+
 ## M8 — Shared knowledge layer (cross-customer learning, leak-proofed)
 
-**Goal:** a second, general memory layer — product quirks, symptom→fix patterns, workarounds relevant to all customers — that agent runs can read but never write directly. Knowledge enters only through a gated promotion pipeline. Full design: spec §10.7. Depends on M7.
+**Goal:** a second, general memory layer — product quirks, symptom→fix patterns, workarounds relevant to all customers — that agent runs can read but never write directly. Knowledge enters only through a gated promotion pipeline. Full design: spec §10.7. Depends on M7; runs last (after M6).
 
 **Build:**
 - `shared_knowledge` table (**no customer identity column exists — by design**) + `shared_knowledge_sources` audit side table that no read path ever touches (spec §10.7 DDL)

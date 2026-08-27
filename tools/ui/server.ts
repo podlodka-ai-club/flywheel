@@ -10,6 +10,7 @@ import { openDb } from "../../src/db/client.ts";
 import { createMockConnectors } from "../../src/connectors/mock.ts";
 import {
   acknowledgeFailed,
+  deleteThread,
   getMessage,
   getThreadMessages,
   insertCustomerMessage,
@@ -73,6 +74,99 @@ async function handleIngest(req: Request): Promise<Response> {
 
 const DB_FILTER_STATUSES = new Set(["pending", "processing", "completed", "failed"]);
 const DB_FILTER_ROLES = new Set(["customer", "assistant", "system"]);
+
+// Editable columns of `messages` and how to coerce the typed text. `id` is the
+// primary key the update is addressed by, so it stays read-only.
+const DB_EDITABLE_COLUMNS: Record<string, "text" | "int" | "real" | "json"> = {
+  thread_id: "text",
+  customer_id: "text",
+  role: "text",
+  content: "text",
+  status: "text",
+  in_reply_to: "text",
+  worker_id: "text",
+  locked_at: "int",
+  attempt_count: "int",
+  error: "text",
+  model: "text",
+  tokens_in: "int",
+  tokens_out: "int",
+  cost_usd: "real",
+  metadata: "json",
+  sent_to_customer_at: "int",
+  created_at: "int",
+  completed_at: "int",
+};
+const DB_NOT_NULL_COLUMNS = new Set(["thread_id", "role", "content", "status", "created_at"]);
+
+/**
+ * Raw cell editor for the Database view: sets one column of one row. The value
+ * arrives as the text the user typed (or null) and is coerced per column type;
+ * role/status stay within their enums so engine queries keep working.
+ */
+async function handleDbCellEdit(req: Request, id: string): Promise<Response> {
+  let payload: { column?: unknown; value?: unknown };
+  try {
+    payload = await req.json();
+  } catch {
+    return json({ error: "invalid JSON body" }, 400);
+  }
+
+  const column = typeof payload.column === "string" ? payload.column : "";
+  if (!Object.hasOwn(DB_EDITABLE_COLUMNS, column)) {
+    return json({ error: `column not editable: ${column || "(missing)"}` }, 400);
+  }
+  const type = DB_EDITABLE_COLUMNS[column];
+  const raw = payload.value;
+  if (raw !== null && typeof raw !== "string") {
+    return json({ error: "value must be a string or null" }, 400);
+  }
+
+  let value: string | number | null;
+  if (raw === null) {
+    if (DB_NOT_NULL_COLUMNS.has(column)) {
+      return json({ error: `${column} is NOT NULL` }, 400);
+    }
+    value = null;
+  } else if (type === "int" || type === "real") {
+    const n = Number(raw.trim());
+    if (raw.trim() === "" || !Number.isFinite(n) || (type === "int" && !Number.isInteger(n))) {
+      return json({ error: `${column} expects ${type === "int" ? "an integer" : "a number"}` }, 400);
+    }
+    value = n;
+  } else if (type === "json") {
+    try {
+      JSON.parse(raw);
+    } catch {
+      return json({ error: `${column} must be valid JSON (or NULL)` }, 400);
+    }
+    value = raw;
+  } else {
+    value = raw;
+  }
+
+  if (column === "status" && !DB_FILTER_STATUSES.has(value as string)) {
+    return json({ error: `status must be one of: ${[...DB_FILTER_STATUSES].join(", ")}` }, 400);
+  }
+  if (column === "role" && !DB_FILTER_ROLES.has(value as string)) {
+    return json({ error: `role must be one of: ${[...DB_FILTER_ROLES].join(", ")}` }, 400);
+  }
+
+  let updated: boolean;
+  try {
+    // `column` is safe to interpolate: it was validated against DB_EDITABLE_COLUMNS.
+    const result = db.prepare(`UPDATE messages SET ${column} = ? WHERE id = ?`).run(value, id);
+    updated = Number(result.changes) > 0;
+  } catch (err) {
+    // e.g. idx_messages_reply_once uniqueness — surface the SQLite message.
+    return json({ error: err instanceof Error ? err.message : String(err) }, 400);
+  }
+  if (!updated) {
+    return json({ error: "row not found (deleted underneath you?)" }, 404);
+  }
+  logger.info("dev_ui_db_cell_edited", { messageId: id, column });
+  return json({ updated });
+}
 
 /** Raw table browser for the Database view: unmapped rows, snake_case and all. */
 function handleDbMessages(url: URL): Response {
@@ -215,6 +309,13 @@ async function handler(req: Request): Promise<Response> {
   if (req.method === "GET" && threadMessages) {
     return json(getThreadMessages(db, decodeURIComponent(threadMessages[1])));
   }
+  const threadDelete = pathname.match(/^\/api\/threads\/([^/]+)$/);
+  if (req.method === "DELETE" && threadDelete) {
+    const threadId = decodeURIComponent(threadDelete[1]);
+    const deleted = deleteThread(db, threadId);
+    logger.info("dev_ui_thread_deleted", { threadId, deleted });
+    return json({ deleted });
+  }
   if (req.method === "POST" && pathname === "/api/messages") {
     return await handleIngest(req);
   }
@@ -249,6 +350,10 @@ async function handler(req: Request): Promise<Response> {
   }
   if (req.method === "GET" && pathname === "/api/db/messages") {
     return handleDbMessages(url);
+  }
+  const dbCellEdit = pathname.match(/^\/api\/db\/messages\/([^/]+)$/);
+  if (req.method === "PATCH" && dbCellEdit) {
+    return await handleDbCellEdit(req, decodeURIComponent(dbCellEdit[1]));
   }
   if (req.method === "GET" && pathname === "/api/db/stats") {
     return handleDbStats();

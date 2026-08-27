@@ -11,9 +11,12 @@ import type {
   CustomerSetup,
   CustomerSummary,
   DeploymentConnector,
+  EscalationAck,
+  EscalationRequest,
   KbArticle,
   KbSearchResult,
   KnowledgeBaseConnector,
+  TicketingConnector,
 } from "./types.ts";
 
 const FIXTURES_URL = (name: string) => new URL(`../../fixtures/${name}`, import.meta.url);
@@ -108,10 +111,23 @@ class MockDeployments implements DeploymentConnector {
   }
 }
 
+class MockTicketing implements TicketingConnector {
+  escalateTicket(request: EscalationRequest): Promise<EscalationAck> {
+    // Later: a real API call to the ticketing platform (set ticket state,
+    // assign a human). The mock just acknowledges with a fabricated reference.
+    return simulateRequest("ticketing", "escalateTicket", { ...request }, () =>
+      Promise.resolve({
+        accepted: true,
+        externalReference: `esc_${crypto.randomUUID().slice(0, 8)}`,
+      }));
+  }
+}
+
 export function createMockConnectors(): Connectors {
   return {
     knowledgeBase: new MockKnowledgeBase(),
     crm: new MockCrm(),
     deployments: new MockDeployments(),
+    ticketing: new MockTicketing(),
   };
 }

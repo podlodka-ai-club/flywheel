@@ -2,6 +2,7 @@ import { assert, assertEquals } from "@std/assert";
 import { join } from "node:path";
 import { openDb } from "../src/db/client.ts";
 import {
+  deleteThread,
   getMessage,
   getThreadMessages,
   insertCustomerMessage,
@@ -82,6 +83,19 @@ Deno.test("getThreadMessages orders by created_at, then id", async () => {
 
     const messages = getThreadMessages(db, "tkt_1");
     assertEquals(messages.map((m) => m.content), ["first", "second"]);
+  });
+});
+
+Deno.test("deleteThread removes only that thread's rows", async () => {
+  await withTempDb((db) => {
+    insertCustomerMessage(db, { id: "ext_1", threadId: "tkt_gone", content: "one" });
+    insertCustomerMessage(db, { id: "ext_2", threadId: "tkt_gone", content: "two" });
+    insertCustomerMessage(db, { id: "ext_3", threadId: "tkt_kept", content: "survivor" });
+
+    assertEquals(deleteThread(db, "tkt_gone"), 2);
+    assertEquals(deleteThread(db, "tkt_gone"), 0);
+    assertEquals(getThreadMessages(db, "tkt_gone"), []);
+    assertEquals(listThreads(db).map((t) => t.threadId), ["tkt_kept"]);
   });
 });
 

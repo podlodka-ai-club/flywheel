@@ -3,7 +3,7 @@
 An asynchronous, decoupled AI support agent for B2B products. **SQLite (WAL) is the message bus**: an external ticketing platform (Zendesk/Intercom/email router/custom CRM) inserts customer messages into a single `messages` table; a Deno engine claims them atomically, runs an LLM agent ([pi.dev](https://github.com/earendil-works/pi) — `pi-agent-core` + `pi-ai`), and commits replies back to the same table for the platform to deliver.
 
 - **[specification.md](specification.md)** — full architecture: schema, queue mechanics, integration contract, escalation/failure semantics.
-- **[milestones.md](milestones.md)** — delivery plan; each milestone ends with hand-verifiable steps. (M1–M5 complete: queue, recovery, coalescing, logging, real agent, tools & escalation. M6 hardening pending.)
+- **[milestones.md](milestones.md)** — delivery plan; each milestone ends with hand-verifiable steps. (M1–M5 complete: queue, recovery, coalescing, logging, real agent, tools & escalation. Remaining, in execution order: M7 per-customer memory, M6 hardening, M8 shared knowledge.)
 
 The agent's tools (documentation search, CRM lookup, customer deployment state, escalation) call external systems through the **connector seam** in `src/connectors/` — currently fixture-backed mocks that simulate outbound requests; production swaps in real wiki/CRM/telemetry clients behind the same interfaces. Customer-scoped tools take no id argument: they are hard-bound to the ticket's verified `customer_id`.
 

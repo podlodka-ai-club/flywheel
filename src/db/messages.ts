@@ -162,6 +162,16 @@ export function acknowledgeFailed(db: DatabaseSync, id: string, now: number): bo
   return Number(result.changes) > 0;
 }
 
+/**
+ * Dev-harness convenience: drop a whole thread's rows. Safe against in-flight
+ * workers — their fenced completion then matches 0 rows and rolls back
+ * ('lost_lease'), so the generated reply is discarded, never resurrected.
+ */
+export function deleteThread(db: DatabaseSync, threadId: string): number {
+  const result = db.prepare(`DELETE FROM messages WHERE thread_id = ?`).run(threadId);
+  return Number(result.changes);
+}
+
 export function listThreads(db: DatabaseSync): ThreadSummary[] {
   // deno-lint-ignore no-explicit-any
   return db.prepare(

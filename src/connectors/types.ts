@@ -67,8 +67,33 @@ export interface DeploymentConnector {
   getSetup(customerId: string, signal?: AbortSignal): Promise<CustomerSetup | null>;
 }
 
+export interface EscalationRequest {
+  threadId: string;
+  /** Verified customer of the ticket (null on unverified tickets). */
+  customerId: string | null;
+  /** Internal reason — for the human agent, not the customer. */
+  reason: string;
+}
+
+export interface EscalationAck {
+  accepted: boolean;
+  /** The ticketing platform's reference for the escalation (case/assignment id). */
+  externalReference: string;
+}
+
+/**
+ * Ticketing platform state changes. The real implementation will call the
+ * external system's API (e.g. Zendesk: set ticket state, assign a human);
+ * the reply row's metadata.escalated flag (spec §3.2) stays authoritative
+ * for the table contract either way.
+ */
+export interface TicketingConnector {
+  escalateTicket(request: EscalationRequest, signal?: AbortSignal): Promise<EscalationAck>;
+}
+
 export interface Connectors {
   knowledgeBase: KnowledgeBaseConnector;
   crm: CrmConnector;
   deployments: DeploymentConnector;
+  ticketing: TicketingConnector;
 }

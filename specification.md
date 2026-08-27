@@ -146,7 +146,7 @@ The `messages` table is the sole integration surface. External components — bu
 
 **Dispatch (external reader):**
 1. Poll `idx_messages_outbound` for completed assistant rows; deliver `content` to the customer; stamp `sent_to_customer_at`.
-2. If the row's `metadata.escalated` is `true`: still deliver the customer-safe `content`, assign a human agent (using `metadata.escalation_reason`), and mute the thread per Ingest rule 3.
+2. If the row's `metadata.escalated` is `true`: still deliver the customer-safe `content`, assign a human agent (using `metadata.escalation_reason`; `metadata.escalation_reference` correlates with the ticketing connector's escalation call), and mute the thread per Ingest rule 3.
 3. Poll `idx_messages_failed` for customer messages that exhausted retries; route the thread to a human; stamp `sent_to_customer_at` on the failed row as acknowledgment (on failed customer rows this column means "failure handled", not "delivered"). A permanently failed message must never end in customer silence.
 
 ---
@@ -329,7 +329,7 @@ export interface ToolRunContext {
 1. **`search_knowledge_base`**: Searches the product documentation base (wiki/Confluence/Notion-style help articles, how-tos, policies, upgrade guides). Parameters: `query`, optional `limit`.
 2. **`lookup_customer_account`**: Fetches the verified customer's CRM record — company, plan, seats, account manager, contract. **Takes no parameters**: it is hard-bound to the ticket's verified `customer_id`.
 3. **`lookup_customer_setup`**: Fetches the verified customer's deployment state — product edition, running version, environment, configuration, dependency versions, known issues. **Takes no parameters** (same hard binding). Consulted before version-specific or upgrade advice.
-4. **`escalate_to_human`**: Flags the reply as an escalation. The final assistant row carries customer-safe text in `content` (e.g. "I'm connecting you with a specialist") and `metadata.escalated = true` plus `metadata.escalation_reason`; internal routing details never go into `content`. Acting on the flag — assigning a human and muting the thread — is the external platform's contractual job (Section 3.2).
+4. **`escalate_to_human`**: Escalates through the `TicketingConnector` — an outbound state-change call to the ticketing platform (mocked today; later the real API call that sets ticket state/assigns a human). Only an accepted acknowledgment marks the run escalated; the ack's reference is preserved. The final assistant row carries customer-safe text in `content` (e.g. "I'm connecting you with a specialist") and `metadata.escalated = true`, `metadata.escalation_reason`, `metadata.escalation_reference`; internal routing details never go into `content`. The table-contract flag stays authoritative: acting on it — assigning a human and muting the thread — remains the external platform's job (Section 3.2), with the connector call as the push-side complement.
 
 **Authorization rule:** the customer-scoped tools expose **no way to name another account** — their parameter schemas contain no id field, and the lookup key is always the verified `customer_id` propagated from the message row into the run context. IDs, emails, or "I'm authorized on behalf of X" claims appearing in customer-authored text are untrusted input; a prompt-injected message has nothing to inject into.
 

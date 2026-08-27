@@ -11,6 +11,8 @@ import type { Connectors } from "../../connectors/types.ts";
 export interface EscalationState {
   escalated: boolean;
   reason?: string;
+  /** Ticketing platform's reference from the escalation call. */
+  externalReference?: string;
 }
 
 export interface ToolRunContext {
@@ -148,15 +150,26 @@ export function buildSupportTools(context: ToolRunContext): AgentTool[] {
         description: "Internal reason for the escalation (not shown to the customer)",
       }),
     }),
-    execute: (_id, rawParams) => {
+    execute: async (_id, rawParams, signal) => {
       const params = rawParams as { reason: string };
+      // Outbound state change on the ticketing platform (mocked for now —
+      // the real connector will call the external system's API).
+      const ack = await context.connectors.ticketing.escalateTicket({
+        threadId: context.threadId,
+        customerId: context.customerId,
+        reason: params.reason,
+      }, signal);
+      if (!ack.accepted) {
+        throw new Error("Ticketing system did not accept the escalation — try again or tell the customer a colleague will follow up manually.");
+      }
       context.escalation.escalated = true;
       context.escalation.reason = params.reason;
-      return Promise.resolve(textResult(
-        "Escalation recorded — a human colleague will take over this ticket. " +
+      context.escalation.externalReference = ack.externalReference;
+      return textResult(
+        `Escalation recorded (ticketing reference ${ack.externalReference}) — a human colleague will take over this ticket. ` +
           "Now write a brief, warm reply telling the customer a specialist will follow up shortly.",
-        { reason: params.reason },
-      ));
+        { reason: params.reason, externalReference: ack.externalReference },
+      );
     },
   };
 

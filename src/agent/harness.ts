@@ -309,7 +309,11 @@ class LlmHarness implements AgentHarness {
         // Escalation contract (spec §3.2/§6.1): structured flag for the
         // dispatcher; the reply text itself stays customer-safe.
         metadata: toolContext.escalation.escalated
-          ? { escalated: true, escalation_reason: toolContext.escalation.reason ?? "unspecified" }
+          ? {
+            escalated: true,
+            escalation_reason: toolContext.escalation.reason ?? "unspecified",
+            escalation_reference: toolContext.escalation.externalReference ?? null,
+          }
           : null,
       },
     };
