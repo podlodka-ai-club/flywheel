@@ -27,6 +27,17 @@ Return ONLY a JSON object:
 
 "playbook" MUST be null unless the transcript contains an internal human-resolution note (marked [internal resolution note]); when present, distill it into a reusable symptom->fix instruction.`;
 
+/**
+ * Models intermittently fence (```json … ```) or preface the JSON despite the
+ * "Return ONLY" instruction, and parseJsonWithRepair only fixes string escapes
+ * — so cut the text down to the outermost object before parsing.
+ */
+function extractJsonObject(text: string): string {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  return start !== -1 && end > start ? text.slice(start, end + 1) : text;
+}
+
 function renderTranscript(messages: MessageRecord[]): string {
   return messages.map((m) => {
     const type = (m.metadata as { type?: string } | null)?.type;
@@ -92,7 +103,10 @@ export function createLlmThreadSummarizer(
       .filter((block): block is Extract<typeof block, { type: "text" }> => block.type === "text")
       .map((block) => block.text)
       .join("\n");
-    const parsed = parseJsonWithRepair(text) as { episode?: unknown; playbook?: unknown };
+    const parsed = parseJsonWithRepair(extractJsonObject(text)) as {
+      episode?: unknown;
+      playbook?: unknown;
+    };
     if (typeof parsed?.episode !== "string" || parsed.episode.trim() === "") {
       throw new Error("summarizer returned no episode");
     }

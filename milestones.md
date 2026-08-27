@@ -189,6 +189,7 @@ Your testing loop: `deno task start` (engine) in one terminal, `deno task dev:ui
 
 **Build:**
 - Graceful shutdown: on SIGINT/SIGTERM stop claiming, finish or release in-flight work, exit
+- **Memory re-summarization** (spec §10.3, specified during M7 review): threads with activity newer than their episode re-qualify once terminal+idle; fresh episode supersedes the old, playbooks superseded and re-distilled (late `human_resolution` notes finally yield their playbook); requires the episode unique index to become partial on `superseded_by IS NULL` (drop-and-recreate migration)
 - Hourly `wal_checkpoint(TRUNCATE)` maintenance task (spec §9.2)
 - `deno task start` runs under the exact least-privilege permission set from spec §9.1 (the dev harness keeps its own dev-only permissions and is never deployed with the engine)
 - README run book: all tasks, env vars, the table contract for future adapter authors, and the harness guide

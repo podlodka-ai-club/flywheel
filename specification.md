@@ -478,10 +478,12 @@ CREATE INDEX IF NOT EXISTS idx_memories_active
 ON memories(customer_id, kind, updated_at DESC)
 WHERE archived_at IS NULL AND superseded_by IS NULL;
 
--- One episode summary per ticket (summarizer idempotency)
+-- One ACTIVE episode summary per ticket (summarizer idempotency).
+-- Partial on superseded_by so re-summarization (Section 10.3) can replace an
+-- episode while keeping the superseded one for audit.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_episode_once
 ON memories(source_thread_id)
-WHERE kind = 'episode';
+WHERE kind = 'episode' AND superseded_by IS NULL;
 ```
 
 **Kinds.** `fact`: durable customer facts — setup quirks, constraints, contacts, preferences (curated, updatable via supersede). `episode`: one per closed ticket — issue, resolution, outcome. `playbook`: learned symptom→fix for this customer, primarily distilled from human resolutions.
@@ -490,6 +492,8 @@ WHERE kind = 'episode';
 
 1. **Agent tools** during a run: `save_memory(content, supersedes?)` and `archive_memory(id)`. In-run saves are always **facts with `provenance='customer_stated'`** — the run is customer-driven, so nothing the model writes mid-run may outrank a claim; the model can choose neither kind nor provenance. (`agent_inferred` is reserved for engine-derived writes.) Episodes and playbooks are written exclusively by the summarizer, so resolution history cannot be forged from a conversation.
 2. **End-of-ticket summarizer** (background job, like the reaper): threads whose messages are all terminal and idle longer than `SUMMARIZE_AFTER_MS` (default 24h) get one `episode` memory, written via the LLM with a cheap summarization prompt. The unique index makes the sweep idempotent. The summarizer may run a different, typically cheaper provider/model than the main agent (`SUMMARIZER_PROVIDER`/`SUMMARIZER_MODEL`, defaulting to the agent's); in echo mode a deterministic summarizer keeps memory testable without a key.
+
+   **Re-summarization — the episode reflects the thread's *final* state.** A thread that receives new messages after being summarized qualifies again once it is terminal and idle: a thread is a candidate when *(no episode exists) OR (last activity is newer than the episode's `updated_at`)*. Re-summarization writes a fresh episode that **supersedes** the previous one (audit chain preserved; the partial unique index keeps exactly one active episode per thread) and supersedes-and-re-distills that thread's playbooks — so a `human_resolution` note arriving after the first summarization still produces its playbook, and other threads never hydrate a stale account of a ticket that flared back up. Cost is one summarizer call per *changed* thread, nothing recurring. *Status: specified 2026-08-27; implementation scheduled in M6 (current code still summarizes each thread at most once and its index is not yet partial on `superseded_by`).*
 3. **Human-resolution feedback** (the self-learning loop): the external platform MAY insert `role='system', status='completed'` rows with `metadata.type='human_resolution'` carrying how a human resolved an escalated ticket (Section 3.2 extension; `status='completed'` keeps them unclaimable). The summarizer distills these into `playbook` memories — the next occurrence of the same symptom is handled without escalation.
 
 ### 10.4. Read path
