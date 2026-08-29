@@ -25,7 +25,7 @@ entire content of the [Integration Boundary Handbook](Integration-Boundary-Handb
 
 ---
 
-## The five core pages
+## How we work
 
 | Page | Read this when |
 |---|---|
@@ -34,6 +34,33 @@ entire content of the [Integration Boundary Handbook](Integration-Boundary-Handb
 | [Integration Boundary Handbook](Integration-Boundary-Handbook) | The fault might belong to someone who is not us |
 | [Request Intake and Triage Standard](Request-Intake-and-Triage-Standard) | A request has arrived and needs to become a well-formed ticket |
 | [Content Publishing and Change Control](Content-Publishing-and-Change-Control) | An operator wants something different on the chamber displays |
+
+Product documentation is indexed separately below.
+
+---
+
+## The product line
+
+Five products, listed by share of support volume. Together they account for roughly
+three quarters of everything FSG handles.
+
+| Page | Product | Share |
+|---|---|---|
+| [Chamber Morale Display](Chamber-Morale-Display) | The in-chamber screen and everything on it | 39% |
+| [Subject Network Access](Subject-Network-Access) | Connectivity, authentication, entitlement | 13% |
+| [Requisition Service](Requisition-Service) | Subject requests and their delivery to staff | 12% |
+| [Facility Console](Facility-Console) | The operator's interface to all of the above | 10% |
+| [Aperture Control](Aperture-Control) | Chamber apertures and the credentials that open them | 4% |
+
+Aperture Control is last by volume and first by consequence. It is the only product where
+a defect can leave a subject unable to leave a chamber, and its tickets carry the highest
+severity per ticket in the estate.
+
+Two further surfaces have no page of their own because their volume sits inside the
+products above: **Subject Device Mirroring** is documented under the display, and the
+**Technician Companion App** under requisitions. The **Subject Intake & Disposition
+System** is third-party throughout and is covered by the
+[Integration Boundary Handbook](Integration-Boundary-Handbook).
 
 ---
 
