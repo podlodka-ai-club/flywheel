@@ -1,8 +1,31 @@
+<!-- meta
+id: fsg-product-acc
+type: product
+audience: triage
+tags: [lock, door, key, card, credential, encoder, mobile-key, aperture]
+-->
+
 # Product: Aperture Control
 
 **Owner:** Enrichment Systems Division — Access Systems
 **Support share:** 4% of all tickets, and the highest severity per ticket of any product
 **Related:** [Support Tiers, Severity and Escalation](Support-Tiers-Severity-and-Escalation)
+
+---
+
+## Triage quick reference
+
+| ID | Symptom | First check | Owner | Sev |
+|---|---|---|---|---|
+| T-ACC-01 | A subject cannot leave a chamber | **E-001. Page the on-call Facility Liaison before diagnosing.** Unknown counts as yes | Aperture | P1 |
+| T-ACC-02 | A door will not close | Check the held-open configuration first — X-002 | Operator | P3 |
+| T-ACC-03 | Cards will not encode | Work console → lock service → encoder. Not the cards | Vendor / Aperture | P2 |
+| T-ACC-04 | Mobile key: no credential appears in the app | Issuance path. The lock is not involved | Aperture | P2 |
+| T-ACC-05 | Mobile key: credential issued, door does not open | Actuation path. Different fault from T-ACC-04 | Vendor | P2 |
+| T-ACC-06 | Lock service unreachable | **Say early that existing credentials still open doors.** New ones cannot be made | Vendor | P2 |
+| T-ACC-07 | Programming cards will not encode | Deployment blocker, not an access incident | Vendor | P3 |
+| T-ACC-08 | "Who supports the lock system?" | Name the vendor and the boundary. Worth doing well | — | P4 |
+| T-ACC-09 | Audit extract requested | Named operator contact only. Legal first if a subject is involved | — | P3 |
 
 ---
 

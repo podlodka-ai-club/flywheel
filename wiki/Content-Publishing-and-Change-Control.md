@@ -1,3 +1,10 @@
+<!-- meta
+id: fsg-content
+type: process
+audience: triage
+tags: [content, publish, cache, media, playlist, schedule, freeze]
+-->
+
 # Content Publishing and Change Control
 
 **Owner:** Facility Support Group — Content Operations

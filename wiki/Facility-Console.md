@@ -1,9 +1,32 @@
+<!-- meta
+id: fsg-product-con
+type: product
+audience: triage
+tags: [console, admin, account, role, permission, licence, template, preview]
+-->
+
 # Product: Facility Console
 
 **Owner:** Enrichment Systems Division — Operator Tools
 **Support share:** 10% of all tickets
 **Related:** [Content Publishing and Change Control](Content-Publishing-and-Change-Control),
 [Request Intake and Triage Standard](Request-Intake-and-Triage-Standard)
+
+---
+
+## Triage quick reference
+
+| ID | Symptom | First check | Owner | Sev |
+|---|---|---|---|---|
+| T-CON-01 | Visible in one console, absent in the other | **Ask which console.** Migration, not a defect — X-010 | — | P4 |
+| T-CON-02 | Password reset link does not work | Token, expiry, or link rewriting by their mail security | Aperture | P3 |
+| T-CON-03 | Interface hangs after credentials accepted | Post-authentication load. Do not spend the ticket on the password | Aperture | P3 |
+| T-CON-04 | Access worked yesterday, not today | Reachability before account state — try another connection | Operator network | P3 |
+| T-CON-05 | Cannot grant a colleague access to a second facility | Expected. The account is estate-level; FSG performs the grant | Aperture | P4 |
+| T-CON-06 | A control is missing | Check the reporter's role first — X-009 | — | P4 |
+| T-CON-07 | Purchased licences not reflected | Provisioning is manual. Apply it; do not refer to the account team | Aperture | P3 |
+| T-CON-08 | Message templates erroring | Templates are shared — confirm scope, likely estate-wide | Aperture | P2 |
+| T-CON-09 | Published from the legacy console, nothing appeared | U-006. Republish from the primary console | — | P3 |
 
 ---
 

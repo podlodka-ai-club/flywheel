@@ -1,9 +1,37 @@
+<!-- meta
+id: fsg-product-req
+type: product
+audience: triage
+tags: [order, requisition, menu, pos, kitchen, payment, staff, notification]
+-->
+
 # Product: Requisition Service
 
 **Owner:** Enrichment Systems Division — Subject Services
 **Support share:** 12% of all tickets
 **Related:** [Integration Boundary Handbook](Integration-Boundary-Handbook),
 [Content Publishing and Change Control](Content-Publishing-and-Change-Control)
+
+---
+
+## Triage quick reference
+
+| ID | Symptom | First check | Owner | Sev |
+|---|---|---|---|---|
+| T-REQ-01 | Overdue notices continue after staff handled it | Acknowledgement is not completion — state-model mismatch | Aperture | P3 |
+| T-REQ-02 | Completion control not visible | Permission-gated, not missing — X-009 | — | P4 |
+| T-REQ-03 | Paid requisition stranded in New | Transition on written request; record who asked | Aperture | P3 |
+| T-REQ-04 | Timeout submitting to the kitchen terminal | Their side. Supply timestamps for their vendor | Third party | P3 |
+| T-REQ-05 | New menu item not orderable | Catalogue synchronisation — scheduled or manual? | Aperture / Operator | P3 |
+| T-REQ-06 | Totals differ between display and app | Billing defect. Verify both surfaces before closing | Aperture | P2 |
+| T-REQ-07 | A payment exists with no requisition | **E-003 financial escalation** — subject charged, nobody preparing | Aperture | P1 |
+| T-REQ-08 | Charge-to-chamber refused for some subjects | The records system's credit flag, not our config | Third party | P3 |
+| T-REQ-09 | Subject notes truncated on the docket | **E-004 safety escalation** — dietary restrictions live there | Either | P2 |
+| T-REQ-10 | Staff receive requisitions outside their services | Notification scope per user | Aperture | P3 |
+| T-REQ-11 | No new requisitions without a manual refresh | Push is the product — core function failure | Aperture | P2 |
+| T-REQ-12 | Requisitions arrive without their alert tone | Functional, not cosmetic. Kitchens do not see silent arrivals | Aperture | P3 |
+| T-REQ-13 | Tasks reach the operator's tracker late | Sustained latency is an outage — X-001 | Aperture | P2 |
+| T-REQ-14 | Consumption not posting to subject accounts | **E-005.** Investigate the whole period, not the noticed cases | Aperture | P2 |
 
 ---
 

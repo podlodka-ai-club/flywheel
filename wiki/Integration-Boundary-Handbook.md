@@ -1,3 +1,10 @@
+<!-- meta
+id: fsg-integration
+type: process
+audience: triage
+tags: [integration, third-party, ownership, whitelist, webhook, licence, boundary]
+-->
+
 # Integration Boundary Handbook
 
 **Owner:** Facility Support Group — Integrations

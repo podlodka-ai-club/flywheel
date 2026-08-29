@@ -1,3 +1,10 @@
+<!-- meta
+id: fsg-home
+type: index
+audience: all
+tags: [index, terminology, glossary, products, overview]
+-->
+
 # Aperture Science — Facility Support Group
 
 Internal documentation for the **Facility Support Group (FSG)**, the team inside the
@@ -61,6 +68,24 @@ products above: **Subject Device Mirroring** is documented under the display, an
 **Technician Companion App** under requisitions. The **Subject Intake & Disposition
 System** is third-party throughout and is covered by the
 [Integration Boundary Handbook](Integration-Boundary-Handbook).
+
+---
+
+## Triage reference
+
+Written for fast decisions rather than reading start to finish. Every entry is
+self-contained and citable by identifier, so it survives being retrieved on its own.
+
+| Page | Answers |
+|---|---|
+| [Escalate or Answer](Escalate-or-Answer) | Escalate, ask, answer, or close — with the hard triggers |
+| [Confusable Symptoms Index](Confusable-Symptoms-Index) | Two faults look identical; which one is this? |
+| [Unsupported Requests and Alternatives](Unsupported-Requests-and-Alternatives) | Things we do not do, and what to offer instead |
+| [Minimum Viable Ticket](Minimum-Viable-Ticket) | What must be known before work can start |
+| [Symptom Vocabulary (RU/EN)](Symptom-Vocabulary-RU-EN) | What reporters write, in either language, mapped to our terms |
+
+Identifier prefixes: **E-** escalation rules, **X-** confusable pairs, **U-** unsupported
+requests, **Q-** intake gates, **T-** per-product triage rows.
 
 ---
 

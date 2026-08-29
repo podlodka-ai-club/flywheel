@@ -16,6 +16,13 @@
 - [Facility Console](Facility-Console)
 - [Aperture Control](Aperture-Control)
 
+**Triage reference**
+- [Escalate or Answer](Escalate-or-Answer)
+- [Confusable Symptoms Index](Confusable-Symptoms-Index)
+- [Unsupported Requests](Unsupported-Requests-and-Alternatives)
+- [Minimum Viable Ticket](Minimum-Viable-Ticket)
+- [Symptom Vocabulary (RU/EN)](Symptom-Vocabulary-RU-EN)
+
 ---
 *If subjects are in chambers and a
 chamber cannot be opened, page the

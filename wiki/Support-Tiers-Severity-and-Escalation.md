@@ -1,3 +1,10 @@
+<!-- meta
+id: fsg-severity
+type: process
+audience: triage
+tags: [severity, sla, tier, escalation, p1, response-time, status, ageing]
+-->
+
 # Support Tiers, Severity and Escalation
 
 **Owner:** Facility Support Group — Service Delivery

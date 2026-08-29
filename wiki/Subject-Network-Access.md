@@ -1,9 +1,32 @@
+<!-- meta
+id: fsg-product-sna
+type: product
+audience: triage
+tags: [wifi, hsia, network, authentication, portal, voucher, bandwidth, sms]
+-->
+
 # Product: Subject Network Access
 
 **Owner:** Enrichment Systems Division — Network Services
 **Support share:** 13% of all tickets
 **Related:** [Integration Boundary Handbook](Integration-Boundary-Handbook),
 [Facility-Down Incident Runbook](Facility-Down-Incident-Runbook)
+
+---
+
+## Triage quick reference
+
+| ID | Symptom | First check | Owner | Sev |
+|---|---|---|---|---|
+| T-SNA-01 | Nobody can authenticate | **Confirm the records feed is live before looking at the portal** — X-008 | Aperture | P2 |
+| T-SNA-02 | Only recently arrived subjects affected | Propagation delay, not failure. Ask when they arrived | — | P3 |
+| T-SNA-03 | Event subscription deactivating repeatedly | Our acknowledgement latency, before re-enabling again | Aperture | P2 |
+| T-SNA-04 | Records API returns 403 / not whitelisted | Our egress address dropped from their allowlist | Third party | P2 |
+| T-SNA-05 | "Disable authentication so guests can connect" | Refuse — U-001. Offer bulk vouchers in the same message | — | P3 |
+| T-SNA-06 | Voucher codes missing from the console | A console fault presenting as a network fault | Aperture | P3 |
+| T-SNA-07 | Speed below what was purchased | Three checks in order — X-012 | Operator / provider | P3 |
+| T-SNA-08 | Guests don't realise other login options exist | Portal affordance. Real operational cost, still P4 | Aperture | P4 |
+| T-SNA-09 | Connection drops every few minutes | Session or link stability — not authentication | Aperture / Operator | P3 |
 
 ---
 

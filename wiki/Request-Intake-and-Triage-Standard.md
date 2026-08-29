@@ -1,3 +1,10 @@
+<!-- meta
+id: fsg-intake
+type: process
+audience: triage
+tags: [triage, intake, category, channel, split, merge, uncategorised]
+-->
+
 # Request Intake and Triage Standard
 
 **Owner:** Facility Support Group — Service Delivery

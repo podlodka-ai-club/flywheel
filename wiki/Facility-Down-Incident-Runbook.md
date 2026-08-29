@@ -1,3 +1,10 @@
+<!-- meta
+id: fsg-runbook
+type: process
+audience: triage
+tags: [incident, p1, outage, vpn, restart, diagnostics, storm, comms]
+-->
+
 # Facility-Down Incident Runbook
 
 **Owner:** Facility Support Group — On-call

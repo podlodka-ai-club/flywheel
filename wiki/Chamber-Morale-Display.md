@@ -1,9 +1,39 @@
+<!-- meta
+id: fsg-product-cmd
+type: product
+audience: triage
+tags: [display, tv, iptv, channel, firmware, casting, mirroring, welcome, device]
+-->
+
 # Product: Chamber Morale Display
 
 **Owner:** Enrichment Systems Division — Display Platform
 **Support share:** 39% of all tickets, the largest single product in the estate
 **Related:** [Content Publishing and Change Control](Content-Publishing-and-Change-Control),
 [Facility-Down Incident Runbook](Facility-Down-Incident-Runbook)
+
+---
+
+## Triage quick reference
+
+One row per symptom as reporters phrase it. `Owner` is who must act, not who is blamed.
+
+| ID | Symptom | First check | Owner | Sev |
+|---|---|---|---|---|
+| T-CMD-01 | No channels anywhere, home screen renders | Platform is alive — look at app, stream source, licensing | Aperture | P1 |
+| T-CMD-02 | Displays entirely dark, «не видят сервер» | Device-to-server path: VLAN, address pool, licence count | Aperture / Operator | P1 |
+| T-CMD-03 | Channel stops mid-play, returns to welcome | Stream lost after acquisition, not a config fault | Aperture | P3 |
+| T-CMD-04 | `app not supported` on a streaming app | Firmware level on that model | Operator | P3 |
+| T-CMD-05 | Streaming app requested on a set-top box | Not possible on that class — see U-003 | — | P4 |
+| T-CMD-06 | Prior subject's credentials still signed in | **E-002 privacy escalation**, not a display bug | Aperture | P2 |
+| T-CMD-07 | Display does not power on at arrival | Arrival events from the records feed | Aperture | P3 |
+| T-CMD-08 | Previous occupant's name still shown | Departure reset failed — X-011, then E-002 | Aperture | P2 |
+| T-CMD-09 | Audio drops, fixed by re-seating the cable | Link negotiation, not the stream | Operator | P3 |
+| T-CMD-10 | Small video window on first channel selection | Known fleet-wide defect — raise under E-008 | Aperture | P3 |
+| T-CMD-11 | Eight-digit prompt after cloning, remote dead | Re-provision; no key sequence dismisses it | Aperture | P3 |
+| T-CMD-12 | Mirroring says all devices busy, nothing connected | Stale session state on the service — X-004 | Aperture | P3 |
+| T-CMD-13 | Remote management lost after an update | Recurring across updates — raise as fleet-wide | Aperture | P2 |
+| T-CMD-14 | A whole language group of channels off air | Upstream provider, not our delivery path | Operator's provider | P2 |
 
 ---
 
