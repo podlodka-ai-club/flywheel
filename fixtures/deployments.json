@@ -1,0 +1,62 @@
+[
+  {
+    "customerId": "google",
+    "product": "DataBridge Self-Hosted",
+    "version": "3.2.1",
+    "channel": "stable",
+    "environment": "on-prem, Kubernetes 1.31, 3 nodes",
+    "config": {
+      "sso": "enabled (SAML, Okta)",
+      "exportLimits": "async over 1M rows",
+      "telemetry": "enabled",
+      "connectorPack": "3.2.0"
+    },
+    "dependencies": [
+      { "name": "PostgreSQL", "version": "15.6" },
+      { "name": "Redis", "version": "7.2" },
+      { "name": "connector-pack-s3", "version": "3.2.0" },
+      { "name": "connector-pack-sap", "version": "3.1.4" }
+    ],
+    "lastHeartbeat": "2026-08-26T21:14:00Z",
+    "knownIssues": []
+  },
+  {
+    "customerId": "facebook",
+    "product": "DataBridge Self-Hosted",
+    "version": "2.9.4",
+    "channel": "stable",
+    "environment": "single VM, Docker Compose",
+    "config": {
+      "sso": "disabled",
+      "exportLimits": "API-only CSV export (pre-3.0)",
+      "telemetry": "disabled",
+      "connectorPack": "2.9.1"
+    },
+    "dependencies": [
+      { "name": "PostgreSQL", "version": "13.11" },
+      { "name": "Redis", "version": "6.2" },
+      { "name": "connector-pack-shopify", "version": "2.9.1" }
+    ],
+    "lastHeartbeat": "2026-08-27T05:02:00Z",
+    "knownIssues": [
+      "PostgreSQL 13 is below the 3.x requirement (14+) — upgrade path: 2.9 → 2.11 → 3.x",
+      "Redis 6.2 must move to 7.x before the 3.x upgrade"
+    ]
+  },
+  {
+    "customerId": "apple",
+    "product": "DataBridge Cloud",
+    "version": "3.3.0 (cloud, managed)",
+    "channel": "cloud",
+    "environment": "managed cloud workspace (trial tier)",
+    "config": {
+      "sso": "not available on Trial",
+      "exportLimits": "10k rows per export on Trial",
+      "telemetry": "enabled",
+      "connectorPack": "managed"
+    },
+    "dependencies": [],
+    "lastHeartbeat": "2026-08-27T06:40:00Z",
+    "knownIssues": []
+  }
+]

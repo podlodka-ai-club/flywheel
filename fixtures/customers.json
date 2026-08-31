@@ -1,0 +1,35 @@
+[
+  {
+    "customerId": "google",
+    "company": "Google Inc.",
+    "plan": "Enterprise",
+    "status": "active",
+    "seats": 240,
+    "accountManager": "Dana Reyes",
+    "primaryContact": { "name": "Jordan Blake", "email": "jordan.blake@google.example" },
+    "contractRenewal": "2027-02-01",
+    "notes": "Strategic account. Self-hosted deployment; change freeze every December."
+  },
+  {
+    "customerId": "facebook",
+    "company": "Facebook Inc.",
+    "plan": "Team",
+    "status": "active",
+    "seats": 35,
+    "accountManager": "Priya Nair",
+    "primaryContact": { "name": "Sam Okafor", "email": "sam.okafor@facebook.example" },
+    "contractRenewal": "2026-11-15",
+    "notes": "Evaluating Enterprise upgrade. Sensitive to API rate limits during holiday season."
+  },
+  {
+    "customerId": "apple",
+    "company": "Apple Inc.",
+    "plan": "Trial",
+    "status": "trial (expires 2026-09-15)",
+    "seats": 5,
+    "accountManager": "unassigned",
+    "primaryContact": { "name": "Alex Fournier", "email": "alex.fournier@apple.example" },
+    "contractRenewal": null,
+    "notes": "Healthcare compliance questions expected; route contract questions to sales."
+  }
+]
