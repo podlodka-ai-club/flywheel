@@ -10,7 +10,7 @@
 
 Runnable skeleton and schema.
 
-- [x] `foundation` — Repo structure, TypeScript config, Fastify server, health endpoint, CLI entry, Vitest wiring
+- [ ] `foundation` — Repo structure, TypeScript config, Fastify server, health endpoint, CLI entry, Vitest wiring
 
 
 > **Milestone:** Dev server runs, health endpoint responds, 

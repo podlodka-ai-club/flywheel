@@ -1,22 +1,21 @@
-import react from '@vitejs/plugin-react';
-import { defineConfig } from 'vitest/config';
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
 
-// Ports and proxy target are env-overridable so the E2E harness can run on
-// isolated ports (client 5174 → server 3100) alongside a dev instance.
-const clientPort = process.env.CLIENT_PORT ? Number(process.env.CLIENT_PORT) : 5173;
-const proxyTarget = process.env.VITE_PROXY_TARGET ?? 'http://localhost:3000';
-
+// https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
   server: {
-    port: clientPort,
+    port: 5173,
     proxy: {
-      '/api': proxyTarget,
+      '/api': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+      },
     },
   },
   test: {
-    environment: 'jsdom',
     globals: true,
-    setupFiles: ['./src/test-setup.ts'],
+    environment: 'jsdom',
+    setupFiles: './src/__tests__/setup.ts',
   },
-});
+})
