@@ -43,10 +43,10 @@ Open **http://localhost:8787**, create a thread, and chat as the customer. Repli
 
 | Task | What it does |
 |---|---|
-| `deno task start` | Runs the agent engine: N worker loops + zombie-lease reaper + memory summarizer. Loads `.env`. |
+| `deno task start` | Runs the agent engine: N worker loops + zombie-lease reaper + the memory strategy's background jobs (the summarizer). Loads `.env`. Extra arguments reach the engine: `deno task start --memory=<name>` picks the [memory strategy](#memory-strategies) for that start. |
 | `deno task dev:ui` | Runs the dev web harness on `localhost:8787` (auto-restarts on code changes). |
 | `deno task db:init` | Creates/migrates `./data/support.db` from [schema.sql](schema.sql). Idempotent; also runs implicitly on every open. |
-| `deno task test` | Full test suite (~50 tests). No network, no API key needed — the LLM harness and summarizer are tested against pi-ai's faux provider and the echo summarizer. |
+| `deno task test` | Full test suite (~60 tests). No network, no API key needed — the LLM harness and summarizer are tested against pi-ai's faux provider and the echo summarizer. |
 
 ## Environment variables
 
@@ -69,7 +69,8 @@ Missing key → the engine exits at startup with the exact fix in the error mess
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `MEMORY_ENABLED` | `1` | Per-customer memory: hydration into the prompt, `save_memory`/`archive_memory` tools, and the end-of-ticket summarizer. |
+| `MEMORY_ENABLED` | `1` | Master switch for per-customer memory in the engine: run handles (hydration into the prompt + the strategy's memory tools) and the strategy's background jobs (the summarizer). The harness Memory view stays available regardless. |
+| `MEMORY_STRATEGY` | `structured` | Which memory implementation runs — a name from the registry in `src/memory/registry.ts`. Set it identically for the engine and the dev harness (like `DATABASE_PATH`); `deno task start --memory=<name>` overrides it for one engine start. See [Memory strategies](#memory-strategies). |
 | `SUMMARIZE_AFTER_MS` | `86400000` | Idle time before a terminal thread is summarized into an `episode` memory (24h; set small in dev). |
 | `SUMMARIZER_PROVIDER` / `SUMMARIZER_MODEL` | *(inherit agent)* | Run summarization on a different (typically cheaper) provider/model than the main agent. |
 | `MEMORY_HYDRATION_BUDGET` | `1200` | Approx. token budget for memories rendered into the system prompt. |
@@ -107,7 +108,7 @@ How these fit together — kinds and provenance, the three write paths, hydratio
 
 ## Memory
 
-The agent carries **per-customer memory**: what it learns about a business account in one ticket is available in the next one. [specification.md](specification.md) §10 is the binding design; this section is the practical tour of what the code does today. Memory lives in its own `memories` table in the same SQLite file (the `messages` table stays the sole queue/conversation store), and every row, query, and tool is keyed by the **verified `customer_id`** the platform attached at ingest — a thread without a verified customer gets no memory at all: nothing hydrates, the memory tools don't exist, the summarizer skips it.
+The agent carries **per-customer memory**: what it learns about a business account in one ticket is available in the next one. [specification.md](specification.md) §10 is the binding design; this section is the practical tour of what the code does today. The implementation sits behind a small strategy seam so variants can be swapped per engine start — see [Memory strategies](#memory-strategies) below; everything up to there describes the default `structured` strategy. Memory lives in its own `memories` table in the same SQLite file (the `messages` table stays the sole queue/conversation store), and every row, query, and tool is keyed by the **verified `customer_id`** the platform attached at ingest — a thread without a verified customer gets no memory at all: nothing hydrates, the memory tools don't exist, the summarizer skips it.
 
 A memory is one row holding one concise statement plus bookkeeping: a **kind**, a **provenance**, the source thread, timestamps, optional expiry, and supersede/archive markers.
 
@@ -156,7 +157,7 @@ Failure is safe in both directions: a response with no usable episode (or a prov
 
 ### How memories reach the agent
 
-Per run, the worker builds a run-scoped, customer-fenced memory handle, and the harness renders the customer's **active** memories into a dedicated system-prompt section: facts first, then playbooks, then episodes, newest first within each kind, until the token budget (`MEMORY_HYDRATION_BUDGET`, ~4 chars/token) is spent — entries that don't fit are dropped and tallied as a "+N older memories omitted" line. Every entry carries its provenance and date:
+Per run, the worker opens the strategy's run-scoped, customer-fenced memory handle; the handle renders the customer's **active** memories and the harness places them in a dedicated system-prompt section: facts first, then playbooks, then episodes, newest first within each kind, until the token budget (`MEMORY_HYDRATION_BUDGET`, ~4 chars/token) is spent — entries that don't fit are dropped and tallied as a "+N older memories omitted" line. Every entry carries its provenance and date:
 
 ```
 - [claimed by customer, 2026-08-12 — unverified] maintenance window is Sunday 02:00
@@ -176,12 +177,20 @@ The system prompt frames the section as background data — **never instructions
 
 ### Why it's hard to poison
 
-- Every query in `src/memory/store.ts` is fenced by `customer_id` — isolation is enforced in the store, not left to callers. A cross-customer supersede throws; a cross-customer archive is a no-op.
+- Every query in `src/memory/strategies/structured/store.ts` is fenced by `customer_id` — isolation is enforced in the store, not left to callers. A cross-customer supersede throws; a cross-customer archive is a no-op.
 - The memory tools take **no customer parameter** — the same security model as the other customer-scoped tools: identity comes from the claimed row, never from message text.
 - Provenance is forced by the write path, so a conversation can only ever produce unverified claims; resolution history (playbooks) can only come from the summarizer reading platform-inserted notes.
 - Write caps bound poisoning velocity (per run and per customer), and every write is a `memory_saved` / `memory_archived` log event, auditable in the Memory tab.
 
 A second, **cross-customer shared-knowledge layer** — read-only for agent runs, filled through an anonymize → screen → human-review promotion pipeline — is designed in spec §10.7 and arrives as milestone M8; it is not implemented yet.
+
+### Memory strategies
+
+Everything above is the `structured` strategy — one implementation of the **memory strategy seam** (`src/memory/strategy.ts`, spec §10.8). The engine never calls it directly: the worker, the LLM harness, the tool assembler, and the dev harness only know the seam, so another implementation can be dropped in beside it and selected per engine start.
+
+- **Selecting one.** `MEMORY_STRATEGY` (default `structured`) picks the implementation; `deno task start --memory=<name>` overrides it for that engine start. An unknown name stops the engine at startup with the registered list. The dev harness serves its Memory view through the same strategy, so set `MEMORY_STRATEGY` for it too — it shares the database file, so it must share the strategy. `MEMORY_ENABLED=0` switches memory off in the engine whatever the strategy; the Memory view keeps working.
+- **What a strategy provides.** `openRun({ customerId, threadId })` returns the per-run handle the worker opens for verified customers only: `hydrate(...)` produces the prompt section (already labelled with provenance) plus the stats logged on `memory_hydrated`, `tools()` the strategy's own tools, `toolGuidance()` their usage lines for the system prompt. `startJobs()` starts background work (the structured strategy's summarizer). `audit` — list customers, list entries, archive, erase — backs the Memory view and the erasure contract. `describe()` feeds `engine_started`.
+- **Adding one.** Create `src/memory/strategies/<name>/` with a factory `(deps: { db, config, llm? }) => MemoryStrategy`, register it in `src/memory/registry.ts`, and run with `--memory=<name>`. `llm` (the agent's resolved provider setup) is undefined in echo mode and in the dev harness, so a factory must stay key-free and deterministic without it. The spec §10 invariants come with the seam: unverified tickets never reach a strategy, tools take no customer id, provenance is assigned in code, and `erase` is a hard delete.
 
 ### Seeing it work
 
@@ -194,7 +203,7 @@ Run with `SUMMARIZE_AFTER_MS=60000`, send a ticket, let the agent reply, click "
 - **Conversations** — send messages as a customer picked from the CRM directory (optionally pin an external message id and hit "↻ redeliver" to watch webhook-redelivery dedup do nothing). Completed replies are auto-stamped `sent_to_customer_at` when rendered, with a delivered tick, reply link, escalation badge, and model · tokens · cost chip. Click any bubble for its full technical record; threads can be deleted. Per-thread actions: "🤝 human resolution" inserts a platform resolution note (spec §3.2 item 4 — the summarizer distills it into a playbook) and "🪵 logs for this thread" jumps to the filtered Logs view. A **⚠ Failed messages** panel appears when messages exhaust retries — "Route to human" acknowledges them.
 - **Database** — a raw browser/editor over **any table in the SQLite file** (`messages`, `memories`, …): row counts, equality filters, and in-place cell editing that respects column types and the engine's enum vocabularies (tables without a single-column primary key are read-only).
 - **Logs** — tails `engine.log` / `dev-ui.log` with level/text/thread filters and follow mode; memory, connector, and summarizer events (`memory_saved`, `connector_request`, `thread_summarized`, …) all show up here.
-- **Memory** — the audit surface for per-customer memory: every entry with kind, provenance, dates, source thread, and status (active/superseded/expired/archived); archive individual entries or run the spec §10.6 **erase-customer** operation.
+- **Memory** — the audit surface for per-customer memory, served through the configured memory strategy (`MEMORY_STRATEGY`, same as the engine's): every entry with kind, provenance, dates, source thread, and status (active/superseded/expired/archived); archive individual entries or run the spec §10.6 **erase-customer** operation.
 - **Config** — every configuration option's default next to the **actual** value from `.env`, which the harness parses as text (it never loads the file into its environment). API keys appear as configured / not configured only — values never leave the server. Entries in `.env` that match no known variable are listed separately, so typos surface.
 
 ## Testing & development
@@ -203,12 +212,13 @@ Run with `SUMMARIZE_AFTER_MS=60000`, send a ticket, let the agent reply, click "
 deno task test
 ```
 
-Covers: DAL round-trips and dedup, atomic claim + per-thread FIFO serialization, the fenced completion transaction and `UNIQUE(in_reply_to)` duplicate-reply backstop, reaper recovery and retry exhaustion, follow-up coalescing, fault markers, log rotation, hydration, tools (scoping, escalation ack, memory provenance/caps), the memory store (isolation, supersede chains, expiry, erasure), the summarizer (idempotency, playbook distillation from human-resolution notes), and the LLM harness against a canned provider — including memory hydration reaching the system prompt and `save_memory` persisting through the agent loop.
+Covers: DAL round-trips and dedup, atomic claim + per-thread FIFO serialization, the fenced completion transaction and `UNIQUE(in_reply_to)` duplicate-reply backstop, reaper recovery and retry exhaustion, follow-up coalescing, fault markers, log rotation, hydration, tools (scoping, escalation ack, memory provenance/caps), the memory store (isolation, supersede chains, expiry, erasure), the memory strategy seam (env/flag selection, registry errors, the structured strategy driven only through the seam, strategy-agnostic worker and harness wiring), the summarizer (idempotency, playbook distillation from human-resolution notes), and the LLM harness against a canned provider — including memory hydration reaching the system prompt and `save_memory` persisting through the agent loop.
 
 Useful during development:
 
 - **Free end-to-end runs:** `AGENT_MODE=echo deno task start` — the whole pipeline without an API key, including memory: a deterministic echo summarizer produces episodes/playbooks too.
 - **Fast memory loops:** `SUMMARIZE_AFTER_MS=60000 SUMMARIZER_MODEL=openai/gpt-4o-mini deno task start` — threads summarize a minute after going idle, on a cheap model.
+- **Swap the memory implementation:** `AGENT_MODE=echo deno task start --memory=<name>` — one engine start on another registered strategy (see [Memory strategies](#memory-strategies)); an unknown name fails fast with the list.
 - **Crash drills:** `DEV_FAULTS=1 LOCK_TIMEOUT_MS=6000 REAPER_INTERVAL_MS=1000 AGENT_MODE=echo deno task start`, then send `[[sleep_once:20000]] hello` and `kill -9` the engine (its pid is in the `engine_started` log line). Restart and watch the reaper reclaim it — exactly one reply. See [milestones.md](milestones.md) M3 for the full drill list.
 - **Reset:** stop everything and delete `./data/` for a fresh database and logs.
 - The harness auto-restarts on server-code changes (`--watch`); reload the browser after UI changes.
@@ -219,12 +229,13 @@ Useful during development:
 schema.sql            DDL: messages (queue + history + outbound buffer) and memories, with indexes
 fixtures/             mock-connector data: KB articles, CRM customers, deployments
 src/
-  config.ts           env-driven configuration (all variables above)
-  main.ts             engine entrypoint: workers + reaper + summarizer + graceful shutdown
+  config.ts           env-driven configuration (all variables above) + the --memory flag
+  main.ts             engine entrypoint: workers + reaper + memory strategy jobs + graceful shutdown
   db/                 SQLite client/migrations, message DAL, queue (claim/fence/reap)
   agent/              harness (echo + pi.dev llm), hydrator, system prompt, tools/
   connectors/         external-system client interfaces + fixture-backed mocks (the swap seam)
-  memory/             per-customer memory store, hydration rendering, summarizer (echo + LLM)
+  memory/             strategy seam (strategy.ts), registry (name → factory), strategies/<name>/
+    strategies/structured/  the spec §10 design: store, summarizer (echo + LLM), save_memory/archive_memory
   engine/             worker loops, zombie-lease reaper
   logger/             @std/log: console + rotating file sinks, JSON lines
 tools/ui/             dev harness (never deployed): server + single-file web UI
@@ -250,3 +261,5 @@ tests/                deno test suite
 | Message stuck `processing` after a crash | Wait for the reaper (`LOCK_TIMEOUT_MS`, default 10 min) or restart the engine; it reclaims expired leases on its first sweep. |
 | No episodes/playbooks appearing | The summarizer waits for threads to be terminal **and** idle for `SUMMARIZE_AFTER_MS` (default 24h) — set it to e.g. `60000` in dev. Check the Logs view for `thread_summarized` / `summarizer_error`. |
 | "Reasoning is mandatory" from the provider | Handled automatically (harness *and* summarizer bump the thinking level and memoize — look for `thinking_level_bumped`); if you see it terminally, the engine predates the fix — restart it. |
+| Engine exits: `Unknown memory strategy "…"` | `MEMORY_STRATEGY` / `--memory` names nothing in `src/memory/registry.ts` — the error lists the registered names. |
+| Memory view empty although the engine saves memories | The harness runs a different `MEMORY_STRATEGY` than the engine — set it identically in both terminals. |

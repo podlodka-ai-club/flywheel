@@ -5,9 +5,9 @@
  * loop that lowers escalation rates over time.
  */
 import type { DatabaseSync } from "node:sqlite";
-import type { MessageRecord } from "../db/messages.ts";
-import { getThreadMessages } from "../db/messages.ts";
-import { logger } from "../logger/index.ts";
+import type { MessageRecord } from "../../../db/messages.ts";
+import { getThreadMessages } from "../../../db/messages.ts";
+import { logger } from "../../../logger/index.ts";
 import { EPISODE_TTL_MS, episodeExists, saveMemory } from "./store.ts";
 
 export interface ThreadSummary {

@@ -30,6 +30,7 @@ Flywheel is a B2B AI customer-support agent framework: Deno 2.x, SQLite (WAL) as
 - Schema changes are **additive migrations** in `src/db/client.ts` `migrate()` (checked via `PRAGMA table_info`) so existing user DBs survive.
 - Logs are single-line JSON, identical on stdout and rotating files; every event carries `threadId`. Per-thread logs are a *filter* in the harness, never per-thread files.
 - Memory (spec §10): every store query keyed by `customer_id`; provenance is system-assigned — in-run `save_memory` writes are always `customer_stated` **facts** (rendered as unverified claims), episodes/playbooks come only from the summarizer; erasure = hard delete by `customer_id`. No memory for rows without a verified customer.
+- **Memory is pluggable** (spec §10.8): `src/memory/strategy.ts` is the seam, `registry.ts` maps names → factories, implementations live in `src/memory/strategies/<name>/` (today only `structured`, the §10 design). Selected by `MEMORY_STRATEGY` or `deno task start --memory=<name>`; the dev harness serves its Memory view through `strategy.audit`, so it must run the same strategy as the engine. The worker, harness, tool assembler, and UI depend only on the seam — never import a strategy's internals from them. Every strategy inherits the invariants above by construction: the worker never opens a run handle for unverified rows, tools stay id-free, provenance is code-assigned, erasure is a hard delete.
 
 ## pi.dev facts (hard-won)
 
@@ -49,6 +50,7 @@ Flywheel is a B2B AI customer-support agent framework: Deno 2.x, SQLite (WAL) as
 ## Testing & dev conveniences
 
 - `deno task test` (network-free, no key needed) and `deno check src/ tools/ tests/` must both pass before handing anything to the user.
+- `deno task <task> --flag=value` forwards extra arguments to the script (`Deno.args`); `config.ts` reads `--memory=<name>` that way, and `loadConfig(args)` takes the arg list so tests can exercise flags.
 - `AGENT_MODE=echo` = free end-to-end runs. Fault markers (echo-only, `DEV_FAULTS=1`): `[[sleep:ms]]` every attempt, `[[sleep_once:ms]]` first attempt only (recovery demos need this — a plain sleep longer than the lease starves into `failed`), `[[fail]]` throws.
 - `engine_started` logs the pid (for `kill -9` drills). The reaper interval auto-clamps to ≤ half the lease.
 - Fixtures describe the fictional product "DataBridge"; customer ids are whatever `fixtures/customers.json` keys say (currently `google`, `facebook`, `cust_3`) — the mock CRM looks up by **key**, and the harness composer datalist comes from `listCustomers()`.

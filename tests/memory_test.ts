@@ -1,5 +1,5 @@
 /**
- * Tests for the per-customer memory store (src/memory/store.ts): strict
+ * Tests for the per-customer memory store (src/memory/strategies/structured/store.ts): strict
  * customer isolation, supersede chains with cross-customer fencing, the
  * active cap and expiry, hard-delete erasure, prompt rendering (kind
  * ordering, provenance labels, token budget), and the run-scoped
@@ -18,7 +18,7 @@ import {
   renderMemoriesForPrompt,
   saveMemory,
   type MemoryRecord,
-} from "../src/memory/store.ts";
+} from "../src/memory/strategies/structured/store.ts";
 
 async function withTempDb(fn: (db: ReturnType<typeof openDb>) => void) {
   const dir = await Deno.makeTempDir({ prefix: "flywheel_memory_test_" });

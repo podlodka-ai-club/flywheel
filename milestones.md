@@ -1,6 +1,6 @@
 # Implementation Milestones
 
-Milestones M1–M8 (plus the M3.5 logging addendum), each ending in something runnable that you verify by hand before we continue. **Execution order: M1 → M5, then M7 (memory), then M6 (hardening), then M8 (shared knowledge)** — M6 and M7 are deliberately swapped so the hardening pass covers the memory subsystem; the numbers stay stable as identifiers. Milestones 1–3 require **no LLM API key**: the engine runs with a deterministic echo agent so all queue mechanics can be exercised for free. The real agent arrives in Milestone 4.
+Milestones M1–M8 (plus the M3.5 logging and M7.5 memory-seam addenda), each ending in something runnable that you verify by hand before we continue. **Execution order: M1 → M5, then M7 (memory) with its M7.5 seam addendum, then M6 (hardening), then M8 (shared knowledge)** — M6 and M7 are deliberately swapped so the hardening pass covers the memory subsystem; the numbers stay stable as identifiers. Milestones 1–3 require **no LLM API key**: the engine runs with a deterministic echo agent so all queue mechanics can be exercised for free. The real agent arrives in Milestone 4.
 
 Testing happens through a **dev web harness** (`tools/ui/`) that simulates the external support platform — ingest and dispatcher — which is out of scope for the core per [specification.md](specification.md) §3.2. It is a separate Deno process from the engine, sharing the SQLite file just like a real co-located adapter would, so every test session also exercises the multi-process WAL contract. No frontend framework, no build step: one `Deno.serve` server with a thin JSON API over the data-access layer, serving a single static HTML page (vanilla JS, ~1s polling).
 
@@ -180,6 +180,28 @@ Your testing loop: `deno task start` (engine) in one terminal, `deno task dev:ui
 6. **Erasure:** run the forget-customer operation → the customer's memories are gone (Memory view empty), messages untouched.
 
 **Automated tests:** store CRUD + supersede/archive + isolation-by-construction; hydration ranking, budget, and provenance rendering; write caps; summarizer idempotency (one episode per thread) and human-resolution → playbook distillation; tool provenance forcing; faux-provider e2e proving hydrated memories reach the system prompt and `save_memory` calls persist.
+
+---
+
+## M7.5 — Memory strategy seam (added on request)
+
+**Goal:** make memory pluggable — several memory variants can exist side by side and the engine picks one per start with a CLI flag — without changing what the M7 implementation does. Design: spec §10.8.
+
+**Build:**
+- `src/memory/strategy.ts`: the seam — `MemoryStrategy` (`openRun`, `startJobs`, `audit`, `describe`) and the per-run handle `MemoryRun` (`hydrate`, `tools`, `toolGuidance`); the worker, the LLM harness, the tool assembler, and the dev harness depend only on it
+- `src/memory/registry.ts`: name → factory; unknown names fail fast at startup with the registered list
+- `src/memory/strategies/structured/`: the M7 implementation moved behind the seam with its behavior unchanged — store, summarizer (echo + LLM), the `save_memory` / `archive_memory` tools (moved out of `src/agent/tools/`), and a wrapper that owns the tools' prompt guidance, the summarizer's model resolution, and the audit surface
+- Selection: `MEMORY_STRATEGY` (default `structured`; in the strict env allowlists and the Config view) and the engine flag `deno task start --memory=<name>` (Deno forwards task arguments to the script); `MEMORY_ENABLED=0` stays the master switch
+- Prompt builder takes the strategy's tool-guidance text instead of hardcoding the memory tools; `engine_started` logs `memoryStrategy` plus the strategy's `describe()` settings (the summarizer/caps fields as before)
+- Dev harness Memory view served through the strategy's `audit` — the harness must run the same `MEMORY_STRATEGY` as the engine (it shares the DB file, so it shares the strategy)
+
+**You verify:**
+1. `deno task start` (llm or echo) → `engine_started` carries `memoryStrategy: "structured"` next to the familiar summarizer/caps fields; the M7 flows (in llm mode: `memory_hydrated` per run and facts via `save_memory`; in both modes: episodes/playbooks from the summarizer, Memory view archive/erase) behave exactly as before.
+2. `deno task start --memory=nope` → the engine exits immediately with `Unknown memory strategy "nope" — registered: structured …`; nothing is claimed.
+3. `MEMORY_ENABLED=0 deno task start` → `memoryStrategy: null`, no `memory_hydrated` events (llm mode), replies still flow; the harness Memory view still shows existing entries.
+4. Config view lists `MEMORY_STRATEGY` with default `structured`; the Memory view still lists your customers' entries (served through the strategy's audit surface now).
+
+**Automated tests:** CLI-flag over env-var selection (and dangling-flag handling); registry resolution and the unknown-name error; the structured strategy driven only through the seam (empty and populated hydration, id-free tools, audit fencing and erasure, job start/stop); the worker opening a run handle from a fake strategy for verified customers only; the LLM harness rendering a fake strategy's section and offering its tools to the model.
 
 ---
 

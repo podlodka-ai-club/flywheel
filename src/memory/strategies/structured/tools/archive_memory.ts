@@ -1,13 +1,13 @@
 /**
- * The archive_memory support tool (spec §10): lets the agent retire a
+ * The archive_memory tool of the `structured` memory strategy (spec §10): lets the agent retire a
  * remembered fact about the current customer that turned out wrong or was
  * withdrawn. Archival goes through the run's MemoryAccess, so it is always
  * fenced to the verified customer — another customer's memory ids miss.
  */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
-import type { MemoryAccess } from "../../memory/store.ts";
-import { textResult } from "./context.ts";
+import type { MemoryAccess } from "../store.ts";
+import { textResult } from "../../../../agent/tools/context.ts";
 
 /** Built only when the run has memory access — verified customer + memory enabled (spec §10.1). */
 export function buildArchiveMemory(memory: MemoryAccess): AgentTool {

@@ -17,20 +17,14 @@ import {
   releaseClaim,
 } from "../db/queue.ts";
 import { logger } from "../logger/index.ts";
-import { createMemoryAccess } from "../memory/store.ts";
-
-export interface WorkerMemoryOptions {
-  hydrationBudgetTokens: number;
-  runWriteCap: number;
-  activeCap: number;
-}
+import type { MemoryStrategy } from "../memory/strategy.ts";
 
 export interface WorkerOptions {
   workerConcurrency: number;
   pollIntervalMs: number;
   maxRetries: number;
-  /** Present = memory enabled; access is built per run for verified customers. */
-  memory?: WorkerMemoryOptions;
+  /** Present = memory enabled; a run handle is opened per run, for verified customers only. */
+  memory?: MemoryStrategy;
 }
 
 export interface EnginePool {
@@ -77,15 +71,10 @@ export function startWorkers(
         message: claimed,
         history,
         followUps: extras,
-        // Memory only for verified customers with memory enabled (spec §10.1).
+        // Memory only for verified customers with memory enabled (spec §10.1):
+        // the strategy never even sees an unverified ticket.
         memory: options.memory !== undefined && claimed.customerId !== null
-          ? createMemoryAccess(db, {
-            customerId: claimed.customerId,
-            threadId: claimed.threadId,
-            hydrationBudgetTokens: options.memory.hydrationBudgetTokens,
-            runWriteCap: options.memory.runWriteCap,
-            activeCap: options.memory.activeCap,
-          })
+          ? options.memory.openRun({ customerId: claimed.customerId, threadId: claimed.threadId })
           : undefined,
         signal: abort.signal,
       };

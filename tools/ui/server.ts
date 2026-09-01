@@ -19,17 +19,18 @@ import {
   listUnacknowledgedFailed,
   markDelivered,
 } from "../../src/db/messages.ts";
-import {
-  archiveMemory,
-  eraseCustomerMemories,
-  listAllMemories,
-  listMemoryCustomers,
-} from "../../src/memory/store.ts";
+import { PROVIDER_KEY_ENVS } from "../../src/agent/harness.ts";
+import { createMemoryStrategy } from "../../src/memory/registry.ts";
 import { parseEnvFile } from "./env_file.ts";
 
 configureLogging({ name: "dev-ui" });
 const db = openDb(config.databasePath);
 const connectors = createMockConnectors();
+// The Memory view is the audit surface of whichever strategy the engine runs,
+// so MEMORY_STRATEGY must match across the two processes (like DATABASE_PATH).
+// No LLM setup here: the harness audits, archives, and erases but never
+// summarizes — and the audit stays available with MEMORY_ENABLED=0.
+const memory = createMemoryStrategy(config.memoryStrategy, { db, config }).audit;
 const INDEX_HTML_URL = new URL("./index.html", import.meta.url);
 
 function json(body: unknown, status = 200): Response {
@@ -368,15 +369,6 @@ const ENV_FILE_PATH = "./.env";
 // Anything credential-shaped is masked by NAME, so no fixed list can miss one.
 const SECRET_ENV_RE = /API_KEY|SECRET|TOKEN|PASSWORD/i;
 
-// Mirrors PROVIDER_KEY_ENVS in src/agent/harness.ts — not imported, because
-// pulling the pi SDK into this process would break dev:ui's strict --allow-env.
-const PROVIDER_KEY_ENVS: Record<string, string> = {
-  openrouter: "OPENROUTER_API_KEY",
-  google: "GEMINI_API_KEY",
-  openai: "OPENAI_API_KEY",
-  anthropic: "ANTHROPIC_API_KEY",
-};
-
 // Every config var with its default as a display string. Kept in sync with
 // loadConfig() in src/config.ts and the README env tables.
 const CONFIG_VARS: { env: string; default: string; section: string; note?: string }[] = [
@@ -385,6 +377,7 @@ const CONFIG_VARS: { env: string; default: string; section: string; note?: strin
   { env: "LLM_MODEL", default: "", section: "LLM & agent", note: "empty = the provider's default model" },
   { env: "LLM_THINKING", default: "off", section: "LLM & agent", note: "auto-clamped per model at runtime" },
   { env: "MEMORY_ENABLED", default: "1", section: "Memory" },
+  { env: "MEMORY_STRATEGY", default: "structured", section: "Memory", note: "registered implementation (src/memory/registry.ts); the engine's --memory=<name> flag overrides it" },
   { env: "SUMMARIZE_AFTER_MS", default: "86400000", section: "Memory", note: "idle time before a terminal thread summarizes" },
   { env: "SUMMARIZER_PROVIDER", default: "", section: "Memory", note: "empty = inherit the agent's" },
   { env: "SUMMARIZER_MODEL", default: "", section: "Memory", note: "empty = inherit the agent's" },
@@ -534,17 +527,17 @@ async function handler(req: Request): Promise<Response> {
 
   // ---- Per-customer memory (spec §10): audit surface + erasure + simulation
   if (req.method === "GET" && pathname === "/api/memory/customers") {
-    return json(listMemoryCustomers(db));
+    return json(memory.listCustomers());
   }
   if (req.method === "GET" && pathname === "/api/memory") {
     const customerId = (url.searchParams.get("customer") ?? "").trim();
     if (customerId === "") return json({ error: "customer query param required" }, 400);
-    return json(listAllMemories(db, customerId));
+    return json(memory.listEntries(customerId));
   }
   if (req.method === "DELETE" && pathname === "/api/memory") {
     const customerId = (url.searchParams.get("customer") ?? "").trim();
     if (customerId === "") return json({ error: "customer query param required" }, 400);
-    const erased = eraseCustomerMemories(db, customerId);
+    const erased = memory.erase(customerId);
     logger.info("dev_ui_memories_erased", { customerId, erased });
     return json({ erased });
   }
@@ -553,7 +546,7 @@ async function handler(req: Request): Promise<Response> {
     const body = await req.json().catch(() => ({}));
     const customerId = typeof body.customerId === "string" ? body.customerId.trim() : "";
     if (customerId === "") return json({ error: "customerId required" }, 400);
-    const archived = archiveMemory(db, customerId, decodeURIComponent(memoryArchive[1]));
+    const archived = memory.archive(customerId, decodeURIComponent(memoryArchive[1]));
     if (archived) {
       logger.info("dev_ui_memory_archived", {
         customerId,

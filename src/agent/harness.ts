@@ -3,8 +3,8 @@
  * Defines the AgentHarness contract (AgentRunInput → AgentReply) and both
  * implementations: EchoHarness (deterministic key-free testing, optional
  * fault markers) and LlmHarness (the real pi-agent-core loop with system
- * prompt, hydrated history, support tools, per-customer memory, and
- * escalation metadata on replies). Also resolves/validates the LLM provider
+ * prompt, hydrated history, support tools, per-customer memory through the
+ * active memory strategy's run handle, and escalation metadata on replies). Also resolves/validates the LLM provider
  * setup at startup and owns thinking-level clamping plus the runtime
  * "reasoning is mandatory" bump shared with the summarizer.
  */
@@ -17,8 +17,7 @@ import { logger } from "../logger/index.ts";
 import type { MessageRecord } from "../db/messages.ts";
 import { createMockConnectors } from "../connectors/mock.ts";
 import type { Connectors } from "../connectors/types.ts";
-import type { MemoryAccess } from "../memory/store.ts";
-import { renderMemoriesForPrompt } from "../memory/store.ts";
+import type { MemoryRun } from "../memory/strategy.ts";
 import { buildPromptMessages, hydrateThreadHistory } from "./hydrator.ts";
 import { buildSystemPrompt } from "./prompt.ts";
 import { buildSupportTools, type ToolRunContext } from "./tools/index.ts";
@@ -52,11 +51,11 @@ export interface AgentRunInput {
    */
   followUps?: MessageRecord[];
   /**
-   * Per-customer memory access (spec §10), built by the worker only for
-   * verified customers with memory enabled. Absent = no reads, no writes,
-   * no memory tools.
+   * Per-customer memory for this run (spec §10): the active strategy's run
+   * handle, opened by the worker only for verified customers with memory
+   * enabled. Absent = no reads, no writes, no memory tools.
    */
-  memory?: MemoryAccess;
+  memory?: MemoryRun;
   signal?: AbortSignal;
 }
 
@@ -282,19 +281,20 @@ class LlmHarness implements AgentHarness {
       escalation: { escalated: false },
       memory: input.memory,
     };
+    // Read path (spec §10.4) through the strategy seam: the run handle decides
+    // what to hydrate and how it is labelled; the harness only places it.
     let memorySection: string | undefined;
     if (input.memory !== undefined) {
-      const rendered = renderMemoriesForPrompt(
-        input.memory.listActive(),
-        input.memory.hydrationBudgetTokens,
-      );
-      memorySection = rendered.text === "" ? undefined : rendered.text;
+      const hydrated = await input.memory.hydrate({
+        message: input.message,
+        followUps: input.followUps ?? [],
+        history: input.history,
+      }, input.signal);
+      memorySection = hydrated.section ?? undefined;
       logger.info("memory_hydrated", {
         threadId: input.threadId,
         customerId: input.customerId,
-        count: rendered.count,
-        approxTokens: rendered.approxTokens,
-        omitted: rendered.omitted,
+        ...hydrated.stats,
       });
     }
     const agent = new Agent({
@@ -303,7 +303,7 @@ class LlmHarness implements AgentHarness {
           threadId: input.threadId,
           customerId: input.customerId,
           memorySection,
-          memoryToolsEnabled: input.memory !== undefined,
+          memoryToolGuidance: input.memory?.toolGuidance() || undefined,
         }),
         model: this.model,
         thinkingLevel: this.thinkingLevel,

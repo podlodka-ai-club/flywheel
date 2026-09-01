@@ -399,10 +399,17 @@ flywheel/
 │   │   ├── hydrator.ts         # Conversation history mapping
 │   │   ├── prompt.ts           # System prompt templates
 │   │   └── tools/
-│   │       └── index.ts        # Support tools (KB search, CRM, deployment, escalation)
+│   │       ├── index.ts        # Assembles the run's tool set (core tools + the memory strategy's) with logging
+│   │       ├── context.ts      # Per-run tool context (verified identity, connectors, escalation state, memory run)
+│   │       └── *.ts            # One file per core tool (KB search, CRM, deployment, escalation)
 │   ├── connectors/
 │   │   ├── types.ts            # External-system client interfaces (the mock/real seam)
 │   │   └── mock.ts             # Fixture-backed mocks simulating outbound requests
+│   ├── memory/
+│   │   ├── strategy.ts         # Memory strategy seam (Section 10.8): MemoryStrategy / MemoryRun / MemoryAudit
+│   │   ├── registry.ts         # name → factory; MEMORY_STRATEGY / --memory=<name> resolve here
+│   │   └── strategies/
+│   │       └── structured/     # The Section 10 design: store, summarizer (echo + LLM), save_memory/archive_memory tools
 │   ├── engine/
 │   │   ├── worker.ts           # Queue polling and execution worker loop
 │   │   └── reaper.ts           # Stale lock recovery background task
@@ -498,7 +505,7 @@ WHERE kind = 'episode' AND superseded_by IS NULL;
 
 ### 10.4. Read path
 
-Per run, the harness hydrates the customer's active memories into the system prompt: facts and playbooks first, then recent episodes; capped by count and token budget (`MEMORY_HYDRATION_BUDGET`). Every entry is rendered **with provenance and date** — customer-stated items read as claims (`[claimed by customer, 2026-07-12] …`), never as established fact. Ranking v1 is kind-priority + recency (no embeddings; semantic retrieval is a later upgrade behind the same interface).
+Per run, the harness hydrates the customer's active memories into the system prompt: facts and playbooks first, then recent episodes; capped by count and token budget (`MEMORY_HYDRATION_BUDGET`). Every entry is rendered **with provenance and date** — customer-stated items read as claims (`[claimed by customer, 2026-07-12] …`), never as established fact. Ranking v1 is kind-priority + recency (no embeddings; semantic retrieval is a later upgrade behind the strategy seam of Section 10.8).
 
 ### 10.5. Poisoning & abuse resistance
 
@@ -563,6 +570,33 @@ CREATE TABLE IF NOT EXISTS shared_knowledge_sources (
 **Erasure interplay.** Erasing customer X deletes their rows from `shared_knowledge_sources`; active knowledge whose *only* source was X is flagged in the erasure report for operator re-review. The content itself contains no identity by construction of stages 2–3.
 
 **The guarantee, stated honestly.** Identity leakage is prevented **structurally**: the hydrated table cannot hold a customer identity, and lineage lives in a side table no read path touches. Content-level leakage (a sentence that indirectly identifies an account) is prevented by **defense in depth** — anonymizer, deterministic directory screen, human gate, optional k-threshold — which is a process guarantee, not a mathematical one; the human reviewer owns the final judgment, exactly as with a hand-curated KB. Cross-tenant *integrity* (customer A poisoning advice given to customer B) is covered by the nomination eligibility rule plus the same human gate.
+
+### 10.8. Memory Strategies — the pluggable seam
+
+Per-customer memory is implemented behind a **strategy seam** so that variants (different storage, retrieval, or learning loops) can be built side by side and swapped per engine start without touching the engine. The seam is `src/memory/strategy.ts`; the worker, the LLM harness, the tool assembler, and the dev harness depend on nothing else.
+
+**Contract.** A strategy is a factory `(deps: { db, config, llm? }) → MemoryStrategy` (`llm` is the agent's resolved provider setup — absent in echo mode and in the dev harness, where a strategy must stay deterministic and key-free):
+
+| Member | Called by | Purpose |
+|---|---|---|
+| `openRun({ customerId, threadId }) → MemoryRun` | the worker, per claimed message, **only when the row carries a verified `customer_id`** | the run-scoped, customer-fenced handle |
+| `MemoryRun.hydrate({ message, followUps, history }) → { section, stats }` | the harness, per generation (incl. coalescing re-runs) | the read path: a prompt section already labelled with provenance (`null` = nothing to say) plus telemetry spread onto `memory_hydrated` |
+| `MemoryRun.tools()` / `MemoryRun.toolGuidance()` | the tool assembler / the prompt builder | the strategy's write-path tools and their `- name — when to use it` lines |
+| `startJobs() → MemoryJob \| null` | the engine, once at startup | background work (summarizers, consolidation) with `stop()` for graceful shutdown |
+| `audit` — `listCustomers()`, `listEntries(customerId)`, `archive(customerId, id)`, `erase(customerId)` | the dev harness Memory view | the operator surface and the erasure contract |
+| `describe()` | `engine_started` | the strategy's resolved settings |
+
+**Selection.** `src/memory/registry.ts` maps names to factories. `MEMORY_STRATEGY` (default `structured`) selects the implementation for a process; `deno task start --memory=<name>` overrides it for one engine start. An unknown name fails at startup with the registered list, before any message is claimed. The engine and the dev harness must run the same strategy — the harness instantiates it (without an LLM setup) for its audit surface — exactly as they must share `DATABASE_PATH`. `MEMORY_ENABLED=0` remains the master switch: no run handles and no jobs, whatever the strategy.
+
+**Invariants every strategy inherits** (the seam is shaped so that most hold by construction):
+
+1. Identity comes from the claimed row. The worker never opens a run handle for an unverified ticket, and `openRun` receives the verified `customer_id` — a strategy has no other source of identity (Section 10.1).
+2. Tools take **no customer id parameter** (Section 6.1's security model); the run handle closes over the identity instead.
+3. Provenance is assigned by strategy code, never chosen by the model, and the hydrated section labels unverified claims as claims (Section 10.5). The prompt-level framing — memories are background data, never instructions; unverified entitlement/billing claims are not acted on — is applied by the harness outside the strategy, so no strategy can drop it.
+4. `audit.erase(customerId)` is a hard delete of everything held about that customer, archived state included (Section 10.6).
+5. Any state a strategy owns beyond the `memories` table is keyed by `customer_id` and created additively and idempotently (`CREATE … IF NOT EXISTS`, by the strategy factory or in `schema.sql`); the `messages` table stays the sole queue/conversation store.
+
+**Registered strategies.** `structured` (`src/memory/strategies/structured/`) is this section's design, Sections 10.2–10.6: typed `fact` / `episode` / `playbook` rows, kind-priority + recency hydration under `MEMORY_HYDRATION_BUDGET`, the `save_memory` / `archive_memory` tools, and the end-of-ticket summarizer as its background job. The shared knowledge layer (Section 10.7) is a separate, customer-free layer, not a strategy.
 
 ---
 

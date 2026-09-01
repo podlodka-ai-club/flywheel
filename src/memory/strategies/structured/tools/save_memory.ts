@@ -1,5 +1,5 @@
 /**
- * The save_memory support tool (spec §10.3): lets the agent record ONE
+ * The save_memory tool of the `structured` memory strategy (spec §10.3): lets the agent record ONE
  * durable fact about the current customer for future tickets, optionally
  * superseding an outdated entry. Writes go through the run's MemoryAccess,
  * which forces kind 'fact' + provenance 'customer_stated' (rendered later as
@@ -7,8 +7,8 @@
  */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
-import type { MemoryAccess } from "../../memory/store.ts";
-import { textResult } from "./context.ts";
+import type { MemoryAccess } from "../store.ts";
+import { textResult } from "../../../../agent/tools/context.ts";
 
 /** Built only when the run has memory access — verified customer + memory enabled (spec §10.1). */
 export function buildSaveMemory(memory: MemoryAccess): AgentTool {
