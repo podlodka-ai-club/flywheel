@@ -44,6 +44,8 @@ The customer journey and the step type that emulates each stage:
 | Ticket goes idle / is closed | platform | `close_ticket` | — |
 | Memory consolidation after idle time | memory engine | `consolidate` | — |
 
+The wiki (`wiki/`, Acme Hotels) was itself derived from the ticket corpus; its README lists the facts deliberately left out so that scenarios keep testing memory rather than lookup — check it before authoring a scenario, and add the scenario's learnable facts to that list.
+
 Reference sources the agent can consult but never learns *from* (they are the
 baseline, not memory): the wiki via `search_knowledge_base`, the CRM record, the
 deployment record. A scenario's `world` says which are present.

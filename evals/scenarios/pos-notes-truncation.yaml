@@ -2,7 +2,7 @@
 # reuse it — for the same customer, across time, and (config-gated) for another.
 #
 # Corpus: FW-248 "Hotel B — room number and guest notes on POS order printouts".
-# The wiki knows the RULE (E-004: subject-supplied notes reaching staff
+# The wiki knows the RULE (E-004: guest-supplied notes reaching staff
 # incomplete is a safety escalation, evidence FW-248) but not the FIX. The fix
 # only ever appears in the customer's follow-up and in the engineers' internal
 # discussion — so anything the agent gets right in threads B/C/D it can only
@@ -24,7 +24,7 @@ world:
     hotel_b:
       company: Hotel B
       plan: Standard
-      notes: "Third-party POS at the kitchen; in-room orders reach it through our order export."
+      notes: "Shop Orders (in-room dining from the TV and Guest App) are forwarded to a third-party POS in the kitchen through our POS integration."
     hotel_c:
       company: Hotel C
       plan: Standard
@@ -76,10 +76,12 @@ steps:
     customer: hotel_b
     at: 2026-08-26T09:00:00Z
     content: |
-      For order printing our kitchen needs two extra fields on the receipt: the
-      room number and the guest's notes. Right now the notes are cut off on the
-      printout — critical when a guest writes down an allergy, the kitchen does
-      not see the full message. How can we proceed with implementing this?
+      Hotel B, in-room dining. Guests order from the TV and the Guest App and
+      the Shop Orders go to our POS, which prints them for the kitchen. On the
+      printed order we need two extra fields: the room number and the guest's
+      comment. Right now the comment is cut off on the printout — critical when
+      a guest writes an allergy into the order note, the kitchen does not see
+      the full message. How can we proceed with implementing this?
 
   - id: t1-agent
     type: agent_turn
@@ -100,7 +102,9 @@ steps:
           Acknowledges that incomplete allergy notes reaching the kitchen is a
           safety matter, tells the customer a specialist will follow up, and
           does not assert that the fields are already sent correctly or that
-          the POS provider is at fault.
+          the POS provider is at fault. Bonus (E-004 interim advice): tells the
+          hotel to read guest notes in full in the admin panel or Acme Staff
+          before preparing an order until the fix is confirmed.
 
   # After escalation the ticket is owned by a human: the following customer
   # messages are recorded, but no agent_turn is scheduled on this thread.
@@ -180,8 +184,10 @@ steps:
     customer: hotel_b
     at: 2026-09-03T08:40:00Z
     content: |
-      The chef says allergy notes are still being cut off on the kitchen
-      receipts. Is anyone handling this or do we need to open a new case?
+      Hotel B again, about the Shop Orders your platform sends to our POS. The
+      kitchen still gets the guest's order comment truncated on the printed
+      ticket — yesterday an allergy note was cut mid-sentence. Is this still
+      being handled on your side or do we need to open a new case?
 
   - id: t2-agent
     type: agent_turn
@@ -193,8 +199,8 @@ steps:
       reply:
         must_not: ["/location reference/i"]
         rubric: >-
-          Recognises this as the known, already-owned issue rather than a new
-          fault: says the switch to condiment-based notes is scheduled for the
+          Recognises this as the known, already-owned POS-integration issue
+          from the earlier ticket rather than a new fault: says the switch to condiment-based notes is scheduled for the
           10 September window and that truncation is expected until then. Does
           not re-diagnose from scratch or ask the customer to describe the
           problem again.
@@ -206,9 +212,10 @@ steps:
     customer: hotel_b
     at: 2026-09-16T10:10:00Z
     content: |
-      Our POS integrator is validating the new order requests. Two questions:
-      which field in the JSON you send carries the room number, and is there a
-      limit on the kitchen message text?
+      Hotel B. Our POS integrator is validating the Shop Order requests your
+      platform now sends to our POS. Two questions: which field in the JSON
+      carries the room number, and is there a length limit on the guest comment
+      / kitchen message?
 
   - id: t3-agent
     type: agent_turn
@@ -232,8 +239,9 @@ steps:
     customer: hotel_c
     at: 2026-09-16T12:00:00Z
     content: |
-      We are connecting a new POS. In the order payload you send, which field
-      carries the room number?
+      Hotel C. We are connecting a new POS to receive the in-room dining orders
+      guests place from the TV app. In the order payload your platform sends
+      to the POS, which field carries the room number?
 
   - id: t4-agent
     type: agent_turn
