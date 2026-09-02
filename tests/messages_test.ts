@@ -13,8 +13,11 @@ import {
   getMessage,
   getThreadMessages,
   insertCustomerMessage,
+  insertHumanEscalationResponse,
+  listHumanEscalations,
   listThreads,
 } from "../src/db/messages.ts";
+import { claimNextMessage, completeWithReply } from "../src/db/queue.ts";
 
 async function withTempDb(fn: (db: ReturnType<typeof openDb>, path: string) => void) {
   const dir = await Deno.makeTempDir({ prefix: "flywheel_test_" });
@@ -119,5 +122,80 @@ Deno.test("listThreads aggregates counts and sorts by recency", async () => {
     assertEquals(threads[0].completedCount, 0);
     assertEquals(threads[0].lastContent, "latest message");
     assertEquals(threads[0].lastActivityAt, 3000);
+  });
+});
+
+Deno.test("human escalation response is scoped, one-shot, and exposes derived lifecycle state", async () => {
+  await withTempDb((db) => {
+    insertCustomerMessage(db, {
+      id: "customer_1",
+      threadId: "ticket_1",
+      customerId: "google",
+      content: "I need a refund",
+      createdAt: 1000,
+    });
+    const claimed = claimNextMessage(db, "worker_1", 1100);
+    assertEquals(claimed?.id, "customer_1");
+    assertEquals(completeWithReply(db, {
+      anchorId: "customer_1",
+      threadId: "ticket_1",
+      workerId: "worker_1",
+      now: 1200,
+      reply: {
+        id: "assistant_escalation",
+        content: "A specialist is reviewing this.",
+        model: "test",
+        tokensIn: null,
+        tokensOut: null,
+        costUsd: null,
+        metadata: {
+          escalated: true,
+          escalation_reason: "refund action required",
+          escalation_request: "Confirm whether the refund was issued",
+          escalation_reference: "esc_test123",
+        },
+      },
+    }), "committed");
+
+    assertEquals(listHumanEscalations(db).map((e) => e.state), ["awaiting_human"]);
+    const inserted = insertHumanEscalationResponse(db, {
+      escalationMessageId: "assistant_escalation",
+      content: "Refund issued; settlement takes 3-5 days.",
+      externalId: "human_event_1",
+      channel: "test",
+      responder: "maria",
+      createdAt: 1300,
+    });
+    assertEquals(inserted.outcome, "inserted");
+    assert(inserted.response !== null);
+    assertEquals(inserted.response.role, "system");
+    assertEquals(inserted.response.status, "pending");
+    assertEquals(inserted.response.threadId, "ticket_1");
+    assertEquals(inserted.response.customerId, "google");
+    assertEquals(inserted.response.inReplyTo, "assistant_escalation");
+    assertEquals(inserted.response.metadata, {
+      type: "human_escalation_response",
+      channel: "test",
+      escalation_reference: "esc_test123",
+      responder: "maria",
+    });
+    assertEquals(listHumanEscalations(db).map((e) => e.state), ["queued"]);
+
+    const duplicate = insertHumanEscalationResponse(db, {
+      escalationMessageId: "assistant_escalation",
+      content: "A conflicting second answer",
+      externalId: "human_event_2",
+    });
+    assertEquals(duplicate.outcome, "duplicate");
+    assertEquals(duplicate.response?.id, "human_event_1");
+
+    assertEquals(insertHumanEscalationResponse(db, {
+      escalationMessageId: "missing",
+      content: "answer",
+    }).outcome, "not_found");
+    assertEquals(insertHumanEscalationResponse(db, {
+      escalationMessageId: "customer_1",
+      content: "answer",
+    }).outcome, "not_escalated");
   });
 });

@@ -9,12 +9,16 @@ import type { MemoryAccess } from "../../memory/store.ts";
 export interface EscalationState {
   escalated: boolean;
   reason?: string;
+  /** Concrete question, decision, or action requested from the colleague. */
+  request?: string;
   /** Ticketing platform's reference from the escalation call. */
   externalReference?: string;
 }
 
 export interface ToolRunContext {
   threadId: string;
+  /** Stable queue anchor; used as the outbound escalation idempotency key. */
+  messageId: string;
   /** Verified identity from the external platform (spec §3.2) — never from message text. */
   customerId: string | null;
   connectors: Connectors;

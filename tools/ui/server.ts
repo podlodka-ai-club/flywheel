@@ -14,7 +14,9 @@ import {
   getMessage,
   getThreadMessages,
   insertCustomerMessage,
+  insertHumanEscalationResponse,
   insertSystemMessage,
+  listHumanEscalations,
   listThreads,
   listUnacknowledgedFailed,
   markDelivered,
@@ -512,6 +514,47 @@ async function handler(req: Request): Promise<Response> {
       logger.info("dev_ui_failed_acknowledged", { messageId: id, threadId: getMessage(db, id)?.threadId });
     }
     return json({ acknowledged });
+  }
+  if (req.method === "GET" && pathname === "/api/escalations") {
+    return json(listHumanEscalations(db));
+  }
+  const escalationResponse = pathname.match(/^\/api\/escalations\/([^/]+)\/respond$/);
+  if (req.method === "POST" && escalationResponse) {
+    const escalationMessageId = decodeURIComponent(escalationResponse[1]);
+    const body = await req.json().catch(() => ({}));
+    const content = typeof body.content === "string" ? body.content.trim() : "";
+    const externalId = typeof body.externalId === "string" ? body.externalId.trim() : undefined;
+    const responder = typeof body.responder === "string" ? body.responder.trim() : undefined;
+    if (content === "") return json({ error: "content required" }, 400);
+    if (content.length > 20_000) return json({ error: "content must be at most 20000 characters" }, 400);
+    const result = insertHumanEscalationResponse(db, {
+      escalationMessageId,
+      content,
+      externalId,
+      responder,
+      channel: "dev-ui",
+    });
+    if (result.outcome === "not_found") return json({ error: "escalation not found" }, 404);
+    if (result.outcome === "not_escalated") {
+      return json({ error: "target is not a completed escalation" }, 409);
+    }
+    if (result.outcome === "id_conflict") {
+      return json({ error: "externalId already belongs to another message" }, 409);
+    }
+    if (result.response === null) return json({ error: "response insert failed" }, 500);
+    const response = result.response;
+    logger.info("dev_ui_human_escalation_responded", {
+      threadId: response.threadId,
+      escalationMessageId,
+      responseMessageId: response.id,
+      responder: response.metadata?.responder ?? null,
+      inserted: result.outcome === "inserted",
+    });
+    return json({
+      id: response.id,
+      inserted: result.outcome === "inserted",
+      state: response.status,
+    });
   }
   if (req.method === "GET" && pathname === "/api/logs") {
     return await handleLogs(url);

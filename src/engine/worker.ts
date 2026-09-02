@@ -128,6 +128,25 @@ export function startWorkers(
           coalescedCount: extras.length,
           totalDurationMs: Date.now() - startedAt,
         });
+        if (reply.metadata?.escalated === true) {
+          logger.info("human_escalation_opened", {
+            threadId: claimed.threadId,
+            messageId: claimed.id,
+            responseId,
+            escalationReference: reply.metadata.escalation_reference ?? null,
+            escalationReason: reply.metadata.escalation_reason ?? "unspecified",
+          });
+        }
+        if (reply.metadata?.human_assisted === true) {
+          logger.info("human_escalation_continued", {
+            threadId: claimed.threadId,
+            messageId: claimed.id,
+            responseId,
+            escalationMessageId: reply.metadata.continued_from_escalation ?? null,
+            escalationReference: reply.metadata.continued_escalation_reference ?? null,
+            waitMs: Math.max(0, startedAt - claimed.createdAt),
+          });
+        }
       } else {
         // Lease lost mid-run: discard the reply, return still-owned claims.
         releaseOwnedClaims(workerId, extras);

@@ -11,7 +11,7 @@ import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import type { Context } from "@earendil-works/pi-ai";
 import { createLlmHarness } from "../src/agent/harness.ts";
-import { hydrateThreadHistory } from "../src/agent/hydrator.ts";
+import { buildPromptMessages, hydrateThreadHistory } from "../src/agent/hydrator.ts";
 import type { MessageRecord } from "../src/db/messages.ts";
 
 function record(id: string, role: MessageRecord["role"], content: string, createdAt: number): MessageRecord {
@@ -248,7 +248,10 @@ Deno.test("tool loop e2e: escalation flag lands on reply metadata; KB result rea
     // Turn 1: the model searches the docs, then escalates.
     fauxAssistantMessage([
       fauxToolCall("search_knowledge_base", { query: "content not updating after publish" }),
-      fauxToolCall("escalate_to_human", { reason: "billing action required" }),
+      fauxToolCall("escalate_to_human", {
+        reason: "billing action required",
+        request: "Confirm whether a refund can be issued",
+      }),
     ], { stopReason: "toolUse" }),
     // Turn 2: sees the tool results, writes the customer-facing reply.
     (context: Context) => {
@@ -278,6 +281,7 @@ Deno.test("tool loop e2e: escalation flag lands on reply metadata; KB result rea
   const metadata = reply.metadata as Record<string, unknown>;
   assertEquals(metadata.escalated, true);
   assertEquals(metadata.escalation_reason, "billing action required");
+  assertEquals(metadata.escalation_request, "Confirm whether a refund can be issued");
   // The mocked ticketing call's reference rides along for platform correlation.
   assert(/^esc_[0-9a-f]{8}$/.test(String(metadata.escalation_reference)));
   // The KB article text made it into the tool results the model saw.
@@ -369,4 +373,47 @@ Deno.test("hydrateThreadHistory maps roles and preserves order/timestamps", () =
     assistant.content.filter((b) => b.type === "text").map((b) => (b as { text: string }).text),
     ["reply"],
   );
+});
+
+Deno.test("human escalation responses are marked internal and produce continuation metadata", async () => {
+  const { faux, harness } = makeHarness();
+  let seen: Context | undefined;
+  faux.setResponses([(context) => {
+    seen = context;
+    return fauxAssistantMessage("The refund has been issued and will appear within five business days.");
+  }]);
+  const response = {
+    ...record("human_1", "system", "Refund approved and issued; bank settlement is 3-5 business days.", 3000),
+    status: "processing" as const,
+    inReplyTo: "assistant_escalation",
+    metadata: {
+      type: "human_escalation_response",
+      escalation_reference: "esc_12345678",
+      responder: "maria@support",
+    },
+  };
+
+  const prompt = buildPromptMessages(response, []);
+  assert(prompt[0].role === "user");
+  assertStringIncludes(String(prompt[0].content), "internal response from a human support colleague");
+  assertStringIncludes(String(prompt[0].content), "not customer-authored text");
+
+  const reply = await harness.run({
+    threadId: "tkt_1",
+    customerId: "cust_7",
+    message: response,
+    history: [
+      record("c1", "customer", "Please refund the duplicate charge", 1000),
+      record("assistant_escalation", "assistant", "A specialist is reviewing this.", 2000),
+    ],
+  });
+  assert(seen !== undefined);
+  const last = seen.messages.at(-1);
+  assert(last?.role === "user");
+  assertStringIncludes(String(last.content), "Refund approved and issued");
+  assertEquals(reply.metadata, {
+    human_assisted: true,
+    continued_from_escalation: "assistant_escalation",
+    continued_escalation_reference: "esc_12345678",
+  });
 });

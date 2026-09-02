@@ -10,7 +10,13 @@ import { join } from "node:path";
 import { createHarness } from "../src/agent/harness.ts";
 import type { AgentHarness } from "../src/agent/harness.ts";
 import { openDb } from "../src/db/client.ts";
-import { getMessage, getThreadMessages, insertCustomerMessage } from "../src/db/messages.ts";
+import {
+  getMessage,
+  getThreadMessages,
+  insertCustomerMessage,
+  insertHumanEscalationResponse,
+  listHumanEscalations,
+} from "../src/db/messages.ts";
 import { startWorkers } from "../src/engine/worker.ts";
 
 async function waitFor(predicate: () => boolean, timeoutMs = 5000, stepMs = 20): Promise<void> {
@@ -151,5 +157,44 @@ Deno.test("failing agent: retries then terminal 'failed' after maxRetries attemp
       getThreadMessages(db, "t1").filter((m) => m.role === "assistant").length,
       0,
     );
+  });
+});
+
+Deno.test("human response re-enters the queue and produces a marked AI continuation", async () => {
+  await withTempDb(async (db) => {
+    db.prepare(
+      `INSERT INTO messages
+         (id, thread_id, customer_id, role, content, status, metadata, created_at, completed_at)
+       VALUES ('esc_reply', 't_human', 'google', 'assistant', 'A specialist is reviewing this.',
+         'completed', '{"escalated":true,"escalation_reference":"esc_12345678"}', 1000, 1000)`,
+    ).run();
+    const handBack = insertHumanEscalationResponse(db, {
+      escalationMessageId: "esc_reply",
+      content: "Refund approved and issued.",
+      externalId: "human_response",
+      createdAt: 2000,
+    });
+    assertEquals(handBack.outcome, "inserted");
+
+    const pool = startWorkers(db, createHarness("echo"), {
+      workerConcurrency: 1,
+      pollIntervalMs: 10,
+      maxRetries: 3,
+    });
+    try {
+      await waitFor(() => getMessage(db, "human_response")?.status === "completed");
+    } finally {
+      await pool.stop();
+    }
+
+    const continuation = getThreadMessages(db, "t_human")
+      .find((m) => m.role === "assistant" && m.inReplyTo === "human_response");
+    assertEquals(continuation?.content, "ECHO: Refund approved and issued.");
+    assertEquals(continuation?.metadata, {
+      human_assisted: true,
+      continued_from_escalation: "esc_reply",
+      continued_escalation_reference: "esc_12345678",
+    });
+    assertEquals(listHumanEscalations(db)[0].state, "continued");
   });
 });

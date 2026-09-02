@@ -1,6 +1,6 @@
 # Implementation Milestones
 
-Milestones M1–M8 (plus the M3.5 logging and M5.5 wiki-search addenda), each ending in something runnable that you verify by hand before we continue. **Execution order: M1 → M5, then M7 (memory), M5.5 (real wiki search), M6 (hardening), and M8 (shared knowledge)** — M6 and M7 are deliberately swapped so the hardening pass covers the memory subsystem, and M5.5 closes the mock retrieval gap before that pass; the numbers stay stable as identifiers. Milestones 1–3 require **no LLM API key**: the engine runs with a deterministic echo agent so all queue mechanics can be exercised for free. The real agent arrives in Milestone 4.
+Milestones M1–M8 (plus the M3.5 logging, M5.5 wiki-search, and M5.6 durable-escalation addenda), each ending in something runnable that you verify by hand before we continue. **Execution order: M1 → M5, then M7 (memory), M5.5 (real wiki search), M5.6 (durable human escalation), M6 (hardening), and M8 (shared knowledge)** — M6 and M7 are deliberately swapped so the hardening pass covers memory and the complete human-in-the-loop lifecycle; the numbers stay stable as identifiers. Milestones 1–3 require **no LLM API key**: the engine runs with a deterministic echo agent so all queue mechanics can be exercised for free. The real agent arrives in Milestone 4.
 
 Testing happens through a **dev web harness** (`tools/ui/`) that simulates the external support platform — ingest and dispatcher — which is out of scope for the core per [specification.md](specification.md) §3.2. It is a separate Deno process from the engine, sharing the SQLite file just like a real co-located adapter would, so every test session also exercises the multi-process WAL contract. No frontend framework, no build step: one `Deno.serve` server with a thin JSON API over the data-access layer, serving a single static HTML page (vanilla JS, ~1s polling).
 
@@ -142,7 +142,7 @@ Your testing loop: `deno task start` (engine) in one terminal, `deno task dev:ui
   - `search_knowledge_base(query, limit?)` — documentation search (wiki/Confluence/Notion stand-in)
   - `lookup_customer_account()` — CRM record; **no id parameter, hard-bound to the verified customer**
   - `lookup_customer_setup()` — deployment state (version, environment, dependencies, known issues); same hard binding
-  - `escalate_to_human(reason)` — makes an outbound state-change call via the mocked `TicketingConnector` (later: the real ticketing-platform API); on an accepted ack the reply row gets `metadata.escalated` + `escalation_reason` + `escalation_reference` (spec §3.2 contract)
+  - `escalate_to_human(reason, request)` — makes an outbound state-change call via the mocked `TicketingConnector` (later: the real ticketing-platform API); on an accepted ack the reply row gets `metadata.escalated` + `escalation_reason` + the concrete `escalation_request` + `escalation_reference` (spec §3.2 contract)
 - System prompt rewritten for tool use: ground every claim in tool results, check the customer's actual version before upgrade advice, never act on account claims in message text
 - Harness UI: fixture-customer picker on the composer (datalist via `/api/customers`); **⚠ escalated** badge with reason on escalated replies; `tool_executed`/`tool_failed`/`connector_request` events in the Logs view
 
@@ -184,6 +184,32 @@ Your testing loop: `deno task start` (engine) in one terminal, `deno task dev:ui
 6. Run the retrieval benchmark and the full suite → the quality thresholds pass and existing tool/agent behavior remains green.
 
 **Automated tests:** Markdown parsing/chunking and validation; comment/evidence stripping; broken-link and duplicate-id failures; FTS query escaping; stop-word and empty queries; exact-id, stemming, title/tag/body weighting, reranking and limit behavior; relevance-threshold misses; cancellation; reload/revision behavior; benchmark Recall@3/MRR; default runtime connector wiring; eval `knowledge_base: wiki` using the Markdown loader; faux-provider e2e proving retrieved wiki text and attribution reach the model; repository assertion that the retired JSON export is absent.
+
+---
+
+## M5.6 — Durable human escalation and hand-back (added on request)
+
+**Goal:** turn escalation from an acknowledged flag into a real asynchronous human-in-the-loop workflow. A colleague can see exactly what the AI needs, respond through an operator interface, and let the LLM continue the customer ticket without a worker or tool call waiting in memory.
+
+**Build:**
+- `escalate_to_human(reason, request)` records a concrete colleague request and sends a stable queue-anchor idempotency key through `TicketingConnector`; retries return the same mock reference and production adapters must dedupe on that key
+- The existing `messages` ledger remains the only integration surface: a colleague hand-back is `role='system'`, `status='pending'`, `metadata.type='human_escalation_response'`, linked to the escalated assistant row through `in_reply_to`
+- A partial unique index guarantees one hand-back per escalation; external event ids retain webhook-redelivery dedup. A second consultation is a new escalation after continuation
+- Claiming explicitly allowlists customer inputs and human-escalation responses, so arbitrary pending system rows cannot execute the agent
+- Hydration labels the human response as authenticated internal case context, not customer text or system-policy override; the resulting customer-safe reply carries `human_assisted` continuation metadata
+- Harness **Escalations** inbox + `GET /api/escalations` + `POST /api/escalations/:assistantMessageId/respond`; the customer composer stays muted until the continuation completes
+- `human_escalation_opened`, `dev_ui_human_escalation_responded`, and `human_escalation_continued` events provide content-free lifecycle audit logs
+- `human_escalation_response` is intentionally distinct from the completed `human_resolution` learning note: the former resumes work now, the latter teaches a future playbook
+
+**You verify:**
+1. Trigger an escalation and open **Escalations**: customer, reason, concrete human request, external reference, and customer-safe reply are visible.
+2. The escalated conversation composer is muted. Submit a colleague response; the inbox changes from `awaiting human` through `response queued` / `AI continuing` to `continued`.
+3. The conversation shows an internal **human colleague** bubble followed by a **human-assisted** assistant reply, which is delivered normally; the composer unmutes.
+4. Double-submit or redeliver the human response: only one pending event and one assistant continuation exist.
+5. Restart the engine while the escalation is awaiting a human, then respond: the workflow continues because no in-memory wait state is required.
+6. Add a separate **🤝 human resolution** note after closure: it remains unclaimable and is still distilled into memory independently.
+
+**Automated tests:** message-contract scoping and one-shot dedup; claim allowlist; worker continuation through echo mode; faux-provider prompt provenance and continuation metadata; connector idempotency; invalid targets and lifecycle-state derivation; full regression suite.
 
 ---
 

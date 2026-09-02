@@ -32,6 +32,13 @@ export function claimNextMessage(
        SELECT id
        FROM messages
        WHERE status = 'pending'
+         AND (
+           role = 'customer'
+           OR (
+             role = 'system'
+             AND json_extract(metadata, '$.type') = 'human_escalation_response'
+           )
+         )
          AND thread_id NOT IN (
            SELECT thread_id FROM messages WHERE status = 'processing'
          )
