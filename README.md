@@ -3,9 +3,9 @@
 An asynchronous, decoupled AI support agent for Acme Hotels Inc.'s hospitality guest-technology products. **SQLite (WAL) is the message bus**: an external ticketing platform (Zendesk/Intercom/email router/custom CRM) inserts customer messages into a single `messages` table; a Deno engine claims them atomically, runs an LLM agent ([pi.dev](https://github.com/earendil-works/pi) — `pi-agent-core` + `pi-ai`), and commits replies back to the same table for the platform to deliver. The agent carries **per-customer memory with hard isolation**: durable facts, per-ticket episode summaries, and playbooks distilled from human resolutions — so escalations teach it, and escalation rates fall over time.
 
 - **[specification.md](specification.md)** — full architecture: schema, queue mechanics, integration contract, escalation/failure semantics.
-- **[milestones.md](milestones.md)** — delivery plan; each milestone ends with hand-verifiable steps. (M1–M5 and M7 complete: queue, recovery, coalescing, logging, real agent, tools & escalation, per-customer memory & self-learning. Remaining, in execution order: M6 hardening, M8 shared knowledge.)
+- **[milestones.md](milestones.md)** — delivery plan; each milestone ends with hand-verifiable steps. (M1–M5.5 and M7 complete: queue, recovery, coalescing, logging, real agent, tools & escalation, direct Markdown wiki search, per-customer memory & self-learning. Remaining, in execution order: M6 hardening, M8 shared knowledge.)
 
-The agent's tools (documentation search, CRM lookup, customer deployment state, escalation) call external systems through the **connector seam** in `src/connectors/` — currently local mocks backed by the Acme wiki export plus CRM/deployment fixtures, with simulated outbound requests; production swaps in real wiki/CRM/ticketing/telemetry clients behind the same interfaces (escalation makes an outbound `TicketingConnector.escalateTicket` state-change call and records the platform's reference on the reply's metadata). Customer-scoped tools take no id argument: they are hard-bound to the ticket's verified `customer_id`; the memory tools can only write customer-stated facts, never resolution history.
+The agent's tools (documentation search, CRM lookup, customer deployment state, escalation) call systems through the **connector seam** in `src/connectors/`. The knowledge-base connector parses and indexes the Markdown in `wiki/` directly; CRM/deployment remain fixture-backed, while escalation makes an outbound `TicketingConnector.escalateTicket` state-change call and records the platform's reference on the reply metadata. Customer-scoped tools take no id argument: they are hard-bound to the ticket's verified `customer_id`; the memory tools can only write customer-stated facts, never resolution history.
 
 ## Prerequisites
 
@@ -46,7 +46,9 @@ Open **http://localhost:8787**, create a thread, and chat as the customer. Repli
 | `deno task start` | Runs the agent engine: N worker loops + zombie-lease reaper + memory summarizer. Loads `.env`. |
 | `deno task dev:ui` | Runs the dev web harness on `localhost:8787` (auto-restarts on code changes). |
 | `deno task db:init` | Creates/migrates `./data/support.db` from [schema.sql](schema.sql). Idempotent; also runs implicitly on every open. |
-| `deno task test` | Full test suite (~50 tests). No network, no API key needed — the LLM harness and summarizer are tested against pi-ai's faux provider and the echo summarizer. |
+| `deno task test` | Full test suite (~60 tests). No network, no API key needed — the LLM harness and summarizer are tested against pi-ai's faux provider and the echo summarizer. |
+| `deno task wiki:check` | Parses and validates every wiki Markdown page; add `-- --coverage` to regenerate `wiki/coverage.md`. |
+| `deno task wiki:search -- "<query>"` | Runs ranked production wiki retrieval directly, without an LLM. |
 
 ## Environment variables
 
@@ -64,6 +66,13 @@ All optional unless noted. The engine (`deno task start`) reads `.env` automatic
 | `GEMINI_API_KEY` | — | **Required** when `LLM_PROVIDER=google` and `AGENT_MODE=llm`. |
 
 Missing key → the engine exits at startup with the exact fix in the error message.
+
+### Knowledge base
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `KNOWLEDGE_BASE_PATH` | `./wiki` | Directory containing the Markdown wiki pages indexed by `search_knowledge_base`. A path outside `./wiki` needs a matching Deno `--allow-read` permission. |
+| `KNOWLEDGE_BASE_RELOAD` | `0` | `1` checks Markdown mtimes before each search and atomically reloads changed pages; useful during development. Production normally keeps the startup snapshot. |
 
 ### Per-customer memory (spec §10)
 
@@ -219,23 +228,15 @@ Useful during development:
 
 Twenty-two GitHub-wiki-style pages: how the support team works (statuses, escalation triggers `E-`, intake gates `Q-`), one page per product (Acme TV, HSIA guest Wi-Fi, PMS integration, ordering, admin panel, …), and reference pages (confusable symptoms `X-`, unsupported requests `U-`, known issues `K-`, a RU/EN phrasebook). Entries are self-contained and addressable by identifier, so a retrieved fragment carries its own context.
 
-**The knowledge-base export.** The KB connector consumes a flat JSON array of `{id, title, tags, body}` articles and ranks them with a naive term-frequency match (title ×3, tags ×2, body ×1), so whole pages retrieve badly — one page matches every query. `wiki/build_kb.py` therefore chunks the pages into that article shape (576 entries, median body ≈ 700 characters), adding an `evidence` list of the tickets each entry came from:
+**The knowledge base.** The `wiki/*.md` files themselves are the KB. Page metadata and heading structure define the stable article identifiers and chunk boundaries; hidden `<!-- evidence: FW-nnn -->` comments remain authoring/audit data and are not shown to the agent. `wiki/coverage.md` maps tickets to the pages that reference them.
 
-```bash
-python3 wiki/build_kb.py            # writes wiki/kb_entries.json
-python3 wiki/build_kb.py --check    # also validates wiki links and identifier uniqueness
-```
-
-Regenerate after editing any page; `python3 wiki/build_kb.py --coverage` also rewrites `wiki/coverage.md`, which maps every ticket to the pages that reference it. `wiki/hide_evidence.py` converts visible `[FW-nnn](…)` citations into the hidden comments — run it after adding a citation in link form.
-
-**Wiring it up.** The mock knowledge-base connector reads `wiki/kb_entries.json` directly; the engine and dev-harness read permissions include that generated export, and the dev harness watches it for changes. CRM and deployment mocks continue to read `fixtures/`. Regenerate the export after editing wiki pages. `wiki/publish.sh` pushes the pages to the repository's GitHub wiki and is never run automatically.
+**Runtime retrieval.** A shared TypeScript loader parses and chunks `wiki/*.md` directly for the runtime, evals, tests, and CLI, then builds an ephemeral SQLite FTS5/BM25 index with relevance thresholds and corpus-revision logging. There is no generated or persistent KB artifact. Search requests do not depend on GitHub or scrape its website; a GitHub-edited wiki can instead be cloned/fetched into the configured local Markdown directory before startup.
 
 ## Layout
 
 ```
 schema.sql            DDL: messages (queue + history + outbound buffer) and memories, with indexes
 fixtures/             mock-connector data: CRM customers and deployments
-wiki/kb_entries.json  generated Acme knowledge-base data used by the mock connector
 src/
   config.ts           env-driven configuration (all variables above)
   main.ts             engine entrypoint: workers + reaper + summarizer + graceful shutdown
@@ -247,13 +248,13 @@ src/
   logger/             @std/log: console + rotating file sinks, JSON lines
 tools/ui/             dev harness (never deployed): server + single-file web UI
 tests/                deno test suite
-wiki/                 synthetic Acme support wiki derived from the issues; build_kb.py -> kb_entries.json (memory-eval baseline)
+wiki/                 Markdown knowledge base and memory-eval baseline
 evals/                memory-eval scenarios (YAML) and the runner design
 ```
 
 ## Operational notes
 
-- **Permissions:** the engine runs sandboxed — network pinned to the LLM provider hosts, reads pinned to `./data` + `schema.sql` + `./fixtures`, writes to `./data`. `--allow-env`/`--allow-sys` are broad for the engine only (the LLM SDK probes env/system metadata dynamically); see spec §9.1.
+- **Permissions:** the engine runs sandboxed — network pinned to the LLM provider hosts, reads pinned to `./data` + `schema.sql` + `./fixtures` + `./wiki`, writes to `./data`. `--allow-env`/`--allow-sys` are broad for the engine only (the LLM SDK probes env/system metadata dynamically); see spec §9.1.
 - **Delivery guarantees:** at-least-once processing with at-most-one delivered reply per customer message (ownership-fenced commit + unique-index backstop). Retry spend on the LLM is accepted; duplicate customer replies are not.
 - **Multiple engine processes** on one host are safe (claims are atomic in SQLite); the SQLite file must be on a local filesystem — network mounts are unsupported with WAL.
 - **Failures are never silent:** after `MAX_RETRIES`, messages become `failed` and surface to the platform (and the harness's Failed panel) until acknowledged.

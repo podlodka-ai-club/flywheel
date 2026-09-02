@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { config } from "../../src/config.ts";
 import { configureLogging, logger } from "../../src/logger/index.ts";
 import { openDb } from "../../src/db/client.ts";
-import { createMockConnectors } from "../../src/connectors/mock.ts";
+import { createConnectors } from "../../src/connectors/index.ts";
 import {
   acknowledgeFailed,
   deleteThread,
@@ -29,7 +29,7 @@ import { parseEnvFile } from "./env_file.ts";
 
 configureLogging({ name: "dev-ui" });
 const db = openDb(config.databasePath);
-const connectors = createMockConnectors();
+const connectors = createConnectors();
 const INDEX_HTML_URL = new URL("./index.html", import.meta.url);
 
 function json(body: unknown, status = 200): Response {
@@ -397,6 +397,8 @@ const CONFIG_VARS: { env: string; default: string; section: string; note?: strin
   { env: "LOCK_TIMEOUT_MS", default: "600000", section: "Queue & engine", note: "lease lifetime; set above worst-case agent runtime" },
   { env: "MAX_RETRIES", default: "3", section: "Queue & engine" },
   { env: "REAPER_INTERVAL_MS", default: "5000", section: "Queue & engine", note: "auto-clamped to ≤ half the lease" },
+  { env: "KNOWLEDGE_BASE_PATH", default: "./wiki", section: "Knowledge base", note: "directory containing the Markdown wiki" },
+  { env: "KNOWLEDGE_BASE_RELOAD", default: "0", section: "Knowledge base", note: "1 = reload changed Markdown before a search" },
   { env: "LOG_LEVEL", default: "info", section: "Logging" },
   { env: "LOG_DIR", default: "./data/logs", section: "Logging" },
   { env: "LOG_MAX_BYTES", default: "5242880", section: "Logging", note: "rotation threshold per file" },

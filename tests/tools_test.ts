@@ -1,19 +1,19 @@
 /**
- * Tests for the support tools (src/agent/tools/) over the mock connectors:
- * knowledge-base search hits and honest misses, customer-scoped tools
+ * Tests for the support tools (src/agent/tools/) over the direct Markdown KB
+ * plus fixture-backed external connectors: search hits and honest misses, customer-scoped tools
  * exposing NO id parameter and failing without a verified identity, and
  * escalation recording the ticketing ack (reason + reference) or surfacing
  * a rejected call as a tool error.
  */
 import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
-import { createMockConnectors } from "../src/connectors/mock.ts";
+import { createConnectors } from "../src/connectors/index.ts";
 import { buildSupportTools, type ToolRunContext } from "../src/agent/tools/index.ts";
 
 function makeContext(customerId: string | null): ToolRunContext {
   return {
     threadId: "tkt_1",
     customerId,
-    connectors: createMockConnectors(),
+    connectors: createConnectors(),
     escalation: { escalated: false },
   };
 }

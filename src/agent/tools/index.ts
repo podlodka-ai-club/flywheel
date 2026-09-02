@@ -32,6 +32,9 @@ function instrument(context: ToolRunContext, tool: AgentTool): AgentTool {
           customerId: context.customerId,
           toolName: tool.name,
           args: params,
+          resultCount: typeof (result.details as { resultCount?: unknown } | undefined)?.resultCount === "number"
+            ? (result.details as { resultCount: number }).resultCount
+            : undefined,
           durationMs: Date.now() - startedAt,
         });
         return result;

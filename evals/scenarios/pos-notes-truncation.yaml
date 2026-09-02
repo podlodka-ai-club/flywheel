@@ -15,8 +15,8 @@ tags: [requisition, integration, safety, memory:personal, memory:temporal, memor
 
 # ---------------------------------------------------------------------------
 # The world the scenario runs in. Missing CRM/deployment fields get runner
-# defaults; `knowledge_base: wiki` serves wiki/kb_entries.json through the
-# KB connector.
+# defaults; `knowledge_base: wiki` serves the repository's wiki/*.md through
+# the same Markdown loader and KB connector used by production.
 world:
   knowledge_base: wiki
   clock: 2026-08-26T09:00:00Z

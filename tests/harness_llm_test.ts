@@ -281,7 +281,8 @@ Deno.test("tool loop e2e: escalation flag lands on reply metadata; KB result rea
   // The mocked ticketing call's reference rides along for platform correlation.
   assert(/^esc_[0-9a-f]{8}$/.test(String(metadata.escalation_reference)));
   // The KB article text made it into the tool results the model saw.
-  assertStringIncludes(toolResultSeen, "T-TV-09 — Content does not update on the TV");
+  assertStringIncludes(toolResultSeen, "X-004 — Content changed in the admin panel");
+  assertStringIncludes(toolResultSeen, "Source: Confusable Symptoms");
 });
 
 Deno.test("memory e2e: hydrated memories reach the system prompt; save_memory persists via the agent loop", async () => {

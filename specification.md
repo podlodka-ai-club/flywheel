@@ -322,7 +322,7 @@ export interface ToolRunContext {
 }
 ```
 
-**Connector seam (`src/connectors/`):** tools never talk to external systems directly — they depend on typed connector interfaces (`KnowledgeBaseConnector`, `CrmConnector`, `DeploymentConnector`). The current implementations are **mocks that simulate outbound requests** (async, latency, `connector_request` logs) against local `fixtures/` data; production replaces them with real clients (a wiki/Confluence/Notion search API, the CRM's API, a deployment-telemetry endpoint) behind the same interfaces, with no tool changes.
+**Connector seam (`src/connectors/`):** tools never talk to external systems directly — they depend on typed connector interfaces (`KnowledgeBaseConnector`, `CrmConnector`, `DeploymentConnector`). The knowledge-base implementation is the direct local wiki search specified in §6.2; CRM, deployment, and ticketing currently use asynchronous fixture-backed mocks and can be replaced independently by real clients behind the same interfaces, with no tool changes.
 
 ### 6.1. Core Support Tools
 
@@ -332,6 +332,30 @@ export interface ToolRunContext {
 4. **`escalate_to_human`**: Escalates through the `TicketingConnector` — an outbound state-change call to the ticketing platform (mocked today; later the real API call that sets ticket state/assigns a human). Only an accepted acknowledgment marks the run escalated; the ack's reference is preserved. The final assistant row carries customer-safe text in `content` (e.g. "I'm connecting you with a specialist") and `metadata.escalated = true`, `metadata.escalation_reason`, `metadata.escalation_reference`; internal routing details never go into `content`. The table-contract flag stays authoritative: acting on it — assigning a human and muting the thread — remains the external platform's job (Section 3.2), with the connector call as the push-side complement.
 
 **Authorization rule:** the customer-scoped tools expose **no way to name another account** — their parameter schemas contain no id field, and the lookup key is always the verified `customer_id` propagated from the message row into the run context. IDs, emails, or "I'm authorized on behalf of X" claims appearing in customer-authored text are untrusted input; a prompt-injected message has nothing to inject into.
+
+### 6.2. Wiki Retrieval (M5.5 design)
+
+The knowledge base is the Markdown under `wiki/`; those are also the files published to GitHub Wiki. There is no generated knowledge-base export. A shared TypeScript loader reads the Markdown directly, strips metadata and evidence comments, validates the corpus, and chunks it into small, self-contained in-memory articles with stable identifiers. Production, tests, evals, and search diagnostics all use this loader so they cannot disagree about what the wiki contains.
+
+Runtime retrieval is local and deterministic:
+
+```text
+wiki/*.md → Markdown loader/chunker → in-memory articles → SQLite FTS5/BM25
+                                                               ↓
+                                                 KnowledgeBaseConnector.search
+                                                               ↓
+                                                   search_knowledge_base tool
+```
+
+The index uses Unicode tokenization with English stemming and weighted fields: identifier/title first, tags second, body third. The connector safely normalizes model-provided query text, removes stop words, retrieves candidates, reranks them using BM25 plus query-term coverage, applies a relevance threshold, and only then enforces the requested result limit. Exact article identifiers and phrases receive explicit boosts. Common-word-only queries and queries below the threshold return no articles; the tool's existing "do not guess" response remains the user-facing miss contract.
+
+Index construction happens once at engine startup, directly from the Markdown. Missing metadata, malformed pages, duplicate ids, broken internal links, or an empty corpus are startup/configuration errors rather than a silent empty index. A `wiki:check` maintenance command runs the same validation without starting the engine and retains optional ticket-coverage reporting. Development mode may atomically rebuild after Markdown mtimes change, while production uses a fixed startup snapshot. The corpus revision is a hash of the ordered source filenames and bytes. Search observes cancellation, and logging includes that revision, candidate and result counts, source, and duration without logging article bodies. `KNOWLEDGE_BASE_PATH` selects the local corpus directory (default `./wiki`), and a `wiki:search` task exercises the production connector directly without an LLM.
+
+The M5 bootstrap file `wiki/kb_entries.json` and its generator are removed by M5.5, together with their runtime permissions and eval assumptions. They are not a cache, index contract, deployment artifact, or fallback. The FTS5 database is an ephemeral derived index inside the engine process and can always be rebuilt from `wiki/*.md`.
+
+GitHub Wiki is a distribution/synchronization option, not the online query backend. A deployment whose editors work on GitHub may explicitly clone or fetch `<owner>/<repo>.wiki.git` into a local cache, then pass those files through the same chunking and indexing path. Individual agent calls never scrape GitHub search pages and never depend on network access, credentials, rate limits, or GitHub indexing freshness. The `KnowledgeBaseConnector` boundary remains available for a future hosted or hybrid implementation.
+
+Retrieval quality is a tested contract, not a spot check. A versioned benchmark maps realistic support queries to expected article ids and includes deliberate no-answer inputs. M5.5 requires Recall@3 of at least 90%, zero false positives on that no-answer set, and publishes MRR for regression diagnosis. Embeddings or hybrid reranking are deferred until this benchmark demonstrates a need.
 
 ---
 

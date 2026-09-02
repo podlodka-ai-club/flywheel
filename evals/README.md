@@ -75,7 +75,7 @@ probes:       # §3.4  end-of-scenario checks against the memory layer itself
 
 ```yaml
 world:
-  knowledge_base: wiki | none | <path to a kb json>   # served through the KB connector
+  knowledge_base: wiki | none | <path to a wiki directory> # served through the KB connector
   clock: <ISO timestamp>                              # scenario start
   customers:
     <customer_id>:                                    # the verified id the platform attaches
@@ -213,7 +213,7 @@ adapter, like the dev harness.
 
 Engine seams the runner needs (each a small, additive change):
 
-1. **Connectors take their data as input** — `createMockConnectors({ customers, deployments, kb })` instead of the hardwired `fixtures/` path.
+1. **Connectors take their data as input** — extend `createConnectors({ knowledgeBasePath, customers, deployments })` so eval CRM/deployment worlds are injectable too; `knowledge_base: wiki` already uses the same direct Markdown loader as production.
 2. **Persona/domain in the prompt** — `buildSystemPrompt` gets the persona text from the world/config instead of the hardcoded Acme Hotels support blurb.
 3. **Two more platform-inserted row types** alongside `human_resolution` (spec §3.2 extension): `internal_note` (`role=system`, `metadata.type`, `metadata.author`) and `human_reply` (`role=assistant`, `metadata.author`, `in_reply_to=NULL`). Hydrator and summarizer render/distill them; the dev UI gets the matching buttons.
 4. **Memory engine adapter** — `src/memory/engine.ts`: `hydrate(customer)`, `tools()`, `consolidate(thread, now)`, `recall(customer, query)`, `proposals()`. The built-in store + summarizer become the first implementation; mem0 & co. implement the same interface.

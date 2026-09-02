@@ -53,18 +53,13 @@ Identifier prefixes: `E-` escalation triggers, `Q-` intake gates, `X-` confusabl
 
 ## Page format
 
-Each page opens with an HTML comment carrying machine-readable metadata (`id`, `type`, `audience`, `tags`), then the H1, a one-line **Read this when**, numbered `##` sections and `###` entries. The tickets an entry was learned from follow it as a hidden comment, `<!-- evidence: FW-021, FW-064 -->`, which GitHub does not render; `hide_evidence.py` produces those comments from visible `[FW-021](https://github.com/podlodka-ai-club/flywheel/issues/21)` citations, so a citation added in link form can be hidden by running it again. Russian appears only in **Also asked as** lines and in the phrasebook — the knowledge-base search only indexes English tokens.
+Each page opens with an HTML comment carrying machine-readable metadata (`id`, `type`, `audience`, `tags`), then the H1, a one-line **Read this when**, numbered `##` sections and `###` entries. Record the tickets an entry was learned from directly after it as a hidden comment, `<!-- evidence: FW-021, FW-064 -->`, which GitHub does not render and the runtime loader does not expose to the agent. Russian appears mainly in **Also asked as** lines and in the phrasebook; the Unicode search index accepts it alongside English.
 
-## Machine-readable export
+## Runtime search and maintenance
 
-```
-python3 wiki/build_kb.py            # writes wiki/kb_entries.json
-python3 wiki/build_kb.py --check    # also validates wiki links and identifier uniqueness
-```
+The Markdown files in this directory are the knowledge base. One shared TypeScript loader serves the production connector, tests, evals, and diagnostic CLI. It chunks every page into one in-memory article per `###` block (or eligible `##` section), retaining `id`, `title`, `tags`, `body`, `source`, and `page`; hidden evidence comments are stripped from agent-visible bodies. The resulting articles are indexed in an ephemeral SQLite FTS5/BM25 database—there is no persistent or generated KB artifact.
 
-`build_kb.py` chunks every page into one entry per `###` block (or per `##` section without sub-entries) in the connector's article shape — `id`, `title`, `tags`, `body`, plus `source`, `page` and `evidence` (the ticket numbers from the hidden comments; the comments themselves are stripped from `body`, so the agent never sees ticket numbers). Whole pages retrieve badly through the mock connector's term-frequency search (one page matches every query); the entries are a few hundred characters each and match one thing. The mock connector and the scenario runner's `knowledge_base: wiki` setting serve `wiki/kb_entries.json` directly. Regenerate after editing any page.
-
-`coverage.md` (regenerate with `python3 wiki/build_kb.py --coverage`) lists, for every ticket, which pages reference it; all 250 tickets are referenced by at least one page. The current export holds 576 entries from 22 pages (median body about 721 characters).
+Run `deno task wiki:check` to validate metadata, stable ids, internal links, and article production directly from the Markdown. Add `-- --coverage` to rewrite `coverage.md`, which lists every ticket and the pages that reference it. Run `deno task wiki:search -- "<query>"` to inspect production ranking without invoking an LLM. Editing a page requires no generation step; restart the production engine, or use `KNOWLEDGE_BASE_RELOAD=1` in development.
 
 ## What the wiki deliberately does not contain
 

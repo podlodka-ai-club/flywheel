@@ -1,0 +1,32 @@
+{
+  "positive": [
+    { "query": "content not updating on TV after publish", "expected": ["t-tv-09", "x-004", "t-adm-06"] },
+    { "query": "the screens retain yesterday's material after I pushed changes", "expected": ["x-004", "t-tv-09", "t-adm-06"] },
+    { "query": "guest wireless captive portal will not appear", "expected": ["t-wifi-06"] },
+    { "query": "TV authorization error service code 1800", "expected": ["t-tv-03"] },
+    { "query": "all casting devices are busy", "expected": ["t-cast-01", "x-009"] },
+    { "query": "guest card refused at elevator", "expected": ["t-lock-02"] },
+    { "query": "PMS API 403 not whitelisted", "expected": ["t-pms-11"] },
+    { "query": "overdue order emails continue after confirmation", "expected": ["t-ord-01", "x-011"] },
+    { "query": "tablet TV On button does nothing BSP 2.1.960", "expected": ["t-tab-04", "k-001"] },
+    { "query": "QR code printed brochure opens search", "expected": ["t-app-04"] },
+    { "query": "no channels on every television", "expected": ["t-ch-01"] },
+    { "query": "admin password reset email never arrives", "expected": ["t-adm-03"] },
+    { "query": "server unreachable VPN", "expected": ["t-net-01", "t-net-02"] },
+    { "query": "room number surname rejected wifi", "expected": ["t-wifi-02", "x-001", "t-pms-02"] },
+    { "query": "guest data remains after checkout", "expected": ["e-002", "t-tv-07", "x-007"] },
+    { "query": "mobile key issued but door stays closed", "expected": ["t-lock-01"] },
+    { "query": "HotSign Raspberry Pi not connected", "expected": ["t-sign-07"] },
+    { "query": "smart TV Applications section missing in one room", "expected": ["t-tv-13"] },
+    { "query": "staff app keeps logging users out", "expected": ["t-ord-15", "k-008"] },
+    { "query": "wifi clients do not receive an IP address", "expected": ["t-wifi-11"] },
+    { "query": "minibar charges are not reaching the folio", "expected": ["t-pms-06", "e-005"] }
+  ],
+  "noAnswer": [
+    "the and how to",
+    "quantum blockchain espresso",
+    "airline luggage carousel policy",
+    "coffee machine descaling procedure",
+    "cryptocurrency refund policy"
+  ]
+}

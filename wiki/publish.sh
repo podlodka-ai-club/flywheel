@@ -6,7 +6,7 @@
 # needs write access to the wiki (push access on the repository, or "Restrict
 # editing to users with push access" unchecked under Settings -> Features -> Wikis).
 #
-# README.md, coverage.md, build_kb.py, kb_entries.json and this script are deliberately not published.
+# README.md, coverage.md and this script are deliberately not published.
 set -euo pipefail
 
 REPO="${1:-podlodka-ai-club/flywheel}"

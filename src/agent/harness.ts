@@ -15,7 +15,7 @@ import type { Api, AssistantMessage, Model, Models } from "@earendil-works/pi-ai
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { logger } from "../logger/index.ts";
 import type { MessageRecord } from "../db/messages.ts";
-import { createMockConnectors } from "../connectors/mock.ts";
+import { createConnectors } from "../connectors/index.ts";
 import type { Connectors } from "../connectors/types.ts";
 import type { MemoryAccess } from "../memory/store.ts";
 import { renderMemoriesForPrompt } from "../memory/store.ts";
@@ -248,7 +248,7 @@ class LlmHarness implements AgentHarness {
     }
     this.streamFn = options.streamFn ??
       ((m, context, streamOptions) => this.models.streamSimple(m, context, streamOptions));
-    this.connectors = options.connectors ?? createMockConnectors();
+    this.connectors = options.connectors ?? createConnectors();
   }
 
   async run(input: AgentRunInput): Promise<AgentReply> {
