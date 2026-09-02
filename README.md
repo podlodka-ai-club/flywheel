@@ -213,6 +213,23 @@ Useful during development:
 - **Reset:** stop everything and delete `./data/` for a fresh database and logs.
 - The harness auto-restarts on server-code changes (`--watch`); reload the browser after UI changes.
 
+## Documentation corpus: `wiki/`
+
+`wiki/` holds a synthetic **internal support wiki** for Acme Hotels Inc., the hospitality guest-technology vendor whose 250 support tickets are filed as this repository's issues (FW-001 … FW-250). It exists for the memory evals in `evals/`: the agent needs a documentation baseline to look up, and scenario authors need to know exactly what that baseline contains so that memory tests target what it does *not* contain. Every product fact on the pages is traced to the ticket it came from through a hidden `<!-- evidence: FW-021 -->` comment (the pages read like a normal wiki and the agent never sees ticket numbers); per-hotel details and one-off resolutions are deliberately left out (the exclusion rules are in `wiki/README.md`, together with the list of conventions that are illustrative rather than corpus-derived).
+
+Twenty-two GitHub-wiki-style pages: how the support team works (statuses, escalation triggers `E-`, intake gates `Q-`), one page per product (Acme TV, HSIA guest Wi-Fi, PMS integration, ordering, admin panel, …), and reference pages (confusable symptoms `X-`, unsupported requests `U-`, known issues `K-`, a RU/EN phrasebook). Entries are self-contained and addressable by identifier, so a retrieved fragment carries its own context.
+
+**The knowledge-base export.** The KB connector consumes a flat JSON array of `{id, title, tags, body}` articles and ranks them with a naive term-frequency match (title ×3, tags ×2, body ×1), so whole pages retrieve badly — one page matches every query. `wiki/build_kb.py` therefore chunks the pages into one entry per `###` block (576 entries, median body ≈ 700 characters) in the same shape as `fixtures/kb_articles.json`, each with an `evidence` list of the tickets it came from:
+
+```bash
+python3 wiki/build_kb.py            # writes wiki/kb_entries.json
+python3 wiki/build_kb.py --check    # also validates wiki links and identifier uniqueness
+```
+
+Regenerate after editing any page; `python3 wiki/build_kb.py --coverage` also rewrites `wiki/coverage.md`, which maps every ticket to the pages that reference it. `wiki/hide_evidence.py` converts visible `[FW-nnn](…)` citations into the hidden comments — run it after adding a citation in link form.
+
+**Wiring it up.** Today the mock connector reads `fixtures/kb_articles.json` (the DataBridge fixture world, which `tests/tools_test.ts` depends on) from a hard-coded path, and the engine's `--allow-read` is pinned to `./data`, `./schema.sql` and `./fixtures`. To run the agent against the wiki, either copy `wiki/kb_entries.json` into `fixtures/` and point the connector at it, or — the planned route — give `createMockConnectors` its data as input, the first runner seam listed in `evals/README.md`; extend `--allow-read` if the file stays under `wiki/`. `wiki/publish.sh` pushes the pages to the repository's GitHub wiki and is never run automatically.
+
 ## Layout
 
 ```
@@ -229,6 +246,8 @@ src/
   logger/             @std/log: console + rotating file sinks, JSON lines
 tools/ui/             dev harness (never deployed): server + single-file web UI
 tests/                deno test suite
+wiki/                 synthetic Acme support wiki derived from the issues; build_kb.py -> kb_entries.json (memory-eval baseline)
+evals/                memory-eval scenarios (YAML) and the runner design
 ```
 
 ## Operational notes
