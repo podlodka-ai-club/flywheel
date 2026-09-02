@@ -96,6 +96,8 @@ Deno.test("llm harness sends hydrated history + anchor + follow-ups and the supp
 
   assertEquals(reply.content, "consolidated answer");
   assert(seen !== undefined, "faux provider never received a request");
+  assertStringIncludes(seen.systemPrompt ?? "", "Acme Hotels Inc.");
+  assertStringIncludes(seen.systemPrompt ?? "", "AcmeStream");
   assertStringIncludes(seen.systemPrompt ?? "", "tkt_1");
   assertStringIncludes(seen.systemPrompt ?? "", "cust_7");
   const roles = seen.messages.map((m) => m.role);
@@ -245,7 +247,7 @@ Deno.test("tool loop e2e: escalation flag lands on reply metadata; KB result rea
   faux.setResponses([
     // Turn 1: the model searches the docs, then escalates.
     fauxAssistantMessage([
-      fauxToolCall("search_knowledge_base", { query: "csv export" }),
+      fauxToolCall("search_knowledge_base", { query: "content not updating after publish" }),
       fauxToolCall("escalate_to_human", { reason: "billing action required" }),
     ], { stopReason: "toolUse" }),
     // Turn 2: sees the tool results, writes the customer-facing reply.
@@ -279,7 +281,8 @@ Deno.test("tool loop e2e: escalation flag lands on reply metadata; KB result rea
   // The mocked ticketing call's reference rides along for platform correlation.
   assert(/^esc_[0-9a-f]{8}$/.test(String(metadata.escalation_reference)));
   // The KB article text made it into the tool results the model saw.
-  assertStringIncludes(toolResultSeen, "Exporting data to CSV");
+  assertStringIncludes(toolResultSeen, "X-004 — Content changed in the admin panel");
+  assertStringIncludes(toolResultSeen, "Source: Confusable Symptoms");
 });
 
 Deno.test("memory e2e: hydrated memories reach the system prompt; save_memory persists via the agent loop", async () => {

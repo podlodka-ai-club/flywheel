@@ -7,6 +7,8 @@
     "jsr:@std/internal@^1.0.12": "1.0.12",
     "jsr:@std/io@~0.225.2": "0.225.3",
     "jsr:@std/log@~0.224.14": "0.224.14",
+    "jsr:@std/yaml@*": "1.2.0",
+    "jsr:@std/yaml@1.2.0": "1.2.0",
     "npm:@earendil-works/pi-agent-core@~0.84.3": "0.84.3",
     "npm:@earendil-works/pi-ai@~0.84.3": "0.84.3"
   },
@@ -36,6 +38,9 @@
         "jsr:@std/fs",
         "jsr:@std/io"
       ]
+    },
+    "@std/yaml@1.2.0": {
+      "integrity": "20beb41e4983ba3437dbefac62b14061ab058e8a187596f19d28ff9035f6e6cf"
     }
   },
   "npm": {

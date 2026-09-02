@@ -1,11 +1,6 @@
-/**
- * Mock connectors: behave like clients of external systems — async, with
- * simulated request latency and a `connector_request` log line per call —
- * but answer from local JSON fixtures. Replaced by real API clients later.
- */
+/** Fixture-backed stand-ins for external CRM, deployment, and ticketing systems. */
 import { logger } from "../logger/index.ts";
 import type {
-  Connectors,
   CrmConnector,
   CustomerProfile,
   CustomerSetup,
@@ -13,9 +8,6 @@ import type {
   DeploymentConnector,
   EscalationAck,
   EscalationRequest,
-  KbArticle,
-  KbSearchResult,
-  KnowledgeBaseConnector,
   TicketingConnector,
 } from "./types.ts";
 
@@ -41,58 +33,34 @@ async function simulateRequest<T>(
   return result;
 }
 
-async function readFixture<T>(name: string, cache: Map<string, unknown>): Promise<T> {
-  if (!cache.has(name)) {
-    cache.set(name, JSON.parse(await Deno.readTextFile(FIXTURES_URL(name))));
+async function readJson<T>(key: string, url: URL, cache: Map<string, unknown>): Promise<T> {
+  if (!cache.has(key)) {
+    cache.set(key, JSON.parse(await Deno.readTextFile(url)));
   }
-  return cache.get(name) as T;
+  return cache.get(key) as T;
 }
 
 const fixtureCache = new Map<string, unknown>();
 
-function tokenize(text: string): string[] {
-  return text.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length > 1);
-}
-
-/** Naive term-frequency scoring: title (x3) + tags (x2) + body (x1). */
-function scoreArticle(article: KbArticle, queryTokens: string[]): number {
-  const title = tokenize(article.title);
-  const tags = article.tags.flatMap(tokenize);
-  const body = tokenize(article.body);
-  let score = 0;
-  for (const token of queryTokens) {
-    score += title.filter((t) => t.startsWith(token)).length * 3;
-    score += tags.filter((t) => t.startsWith(token)).length * 2;
-    score += body.filter((t) => t.startsWith(token)).length;
-  }
-  return score;
-}
-
-class MockKnowledgeBase implements KnowledgeBaseConnector {
-  search(query: string, limit: number): Promise<KbSearchResult[]> {
-    return simulateRequest("knowledge_base", "search", { query, limit }, async () => {
-      const articles = await readFixture<KbArticle[]>("kb_articles.json", fixtureCache);
-      const queryTokens = tokenize(query);
-      return articles
-        .map((article) => ({ article, score: scoreArticle(article, queryTokens) }))
-        .filter((result) => result.score > 0)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, limit);
-    });
-  }
-}
-
 class MockCrm implements CrmConnector {
   getCustomer(customerId: string): Promise<CustomerProfile | null> {
     return simulateRequest("crm", "getCustomer", { customerId }, async () => {
-      const customers = await readFixture<CustomerProfile[]>("customers.json", fixtureCache);
+      const customers = await readJson<CustomerProfile[]>(
+        "customers",
+        FIXTURES_URL("customers.json"),
+        fixtureCache,
+      );
       return customers.find((c) => c.customerId === customerId) ?? null;
     });
   }
 
   listCustomers(): Promise<CustomerSummary[]> {
     return simulateRequest("crm", "listCustomers", {}, async () => {
-      const customers = await readFixture<CustomerProfile[]>("customers.json", fixtureCache);
+      const customers = await readJson<CustomerProfile[]>(
+        "customers",
+        FIXTURES_URL("customers.json"),
+        fixtureCache,
+      );
       return customers.map((c) => ({
         customerId: c.customerId,
         company: c.company,
@@ -105,7 +73,11 @@ class MockCrm implements CrmConnector {
 class MockDeployments implements DeploymentConnector {
   getSetup(customerId: string): Promise<CustomerSetup | null> {
     return simulateRequest("deployments", "getSetup", { customerId }, async () => {
-      const setups = await readFixture<CustomerSetup[]>("deployments.json", fixtureCache);
+      const setups = await readJson<CustomerSetup[]>(
+        "deployments",
+        FIXTURES_URL("deployments.json"),
+        fixtureCache,
+      );
       return setups.find((s) => s.customerId === customerId) ?? null;
     });
   }
@@ -123,9 +95,12 @@ class MockTicketing implements TicketingConnector {
   }
 }
 
-export function createMockConnectors(): Connectors {
+export function createMockExternalConnectors(): {
+  crm: CrmConnector;
+  deployments: DeploymentConnector;
+  ticketing: TicketingConnector;
+} {
   return {
-    knowledgeBase: new MockKnowledgeBase(),
     crm: new MockCrm(),
     deployments: new MockDeployments(),
     ticketing: new MockTicketing(),

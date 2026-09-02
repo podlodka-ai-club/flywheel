@@ -1,11 +1,11 @@
 # Flywheel — AI Customer Support Agent
 
-An asynchronous, decoupled AI support agent for B2B products. **SQLite (WAL) is the message bus**: an external ticketing platform (Zendesk/Intercom/email router/custom CRM) inserts customer messages into a single `messages` table; a Deno engine claims them atomically, runs an LLM agent ([pi.dev](https://github.com/earendil-works/pi) — `pi-agent-core` + `pi-ai`), and commits replies back to the same table for the platform to deliver. The agent carries **per-customer memory with hard isolation**: durable facts, per-ticket episode summaries, and playbooks distilled from human resolutions — so escalations teach it, and escalation rates fall over time.
+An asynchronous, decoupled AI support agent for Acme Hotels Inc.'s hospitality guest-technology products. **SQLite (WAL) is the message bus**: an external ticketing platform (Zendesk/Intercom/email router/custom CRM) inserts customer messages into a single `messages` table; a Deno engine claims them atomically, runs an LLM agent ([pi.dev](https://github.com/earendil-works/pi) — `pi-agent-core` + `pi-ai`), and commits replies back to the same table for the platform to deliver. The agent carries **per-customer memory with hard isolation**: durable facts, per-ticket episode summaries, and playbooks distilled from human resolutions — so escalations teach it, and escalation rates fall over time.
 
 - **[specification.md](specification.md)** — full architecture: schema, queue mechanics, integration contract, escalation/failure semantics.
-- **[milestones.md](milestones.md)** — delivery plan; each milestone ends with hand-verifiable steps. (M1–M5 and M7 complete: queue, recovery, coalescing, logging, real agent, tools & escalation, per-customer memory & self-learning. Remaining, in execution order: M6 hardening, M8 shared knowledge.)
+- **[milestones.md](milestones.md)** — delivery plan; each milestone ends with hand-verifiable steps. (M1–M5.5 and M7 complete: queue, recovery, coalescing, logging, real agent, tools & escalation, direct Markdown wiki search, per-customer memory & self-learning. Remaining, in execution order: M6 hardening, M8 shared knowledge.)
 
-The agent's tools (documentation search, CRM lookup, customer deployment state, escalation) call external systems through the **connector seam** in `src/connectors/` — currently fixture-backed mocks that simulate outbound requests; production swaps in real wiki/CRM/ticketing/telemetry clients behind the same interfaces (escalation makes an outbound `TicketingConnector.escalateTicket` state-change call and records the platform's reference on the reply's metadata). Customer-scoped tools take no id argument: they are hard-bound to the ticket's verified `customer_id`; the memory tools can only write customer-stated facts, never resolution history.
+The agent's tools (documentation search, CRM lookup, customer deployment state, escalation) call systems through the **connector seam** in `src/connectors/`. The knowledge-base connector parses and indexes the Markdown in `wiki/` directly; CRM/deployment remain fixture-backed, while escalation makes an outbound `TicketingConnector.escalateTicket` state-change call and records the platform's reference on the reply metadata. Customer-scoped tools take no id argument: they are hard-bound to the ticket's verified `customer_id`; the memory tools can only write customer-stated facts, never resolution history.
 
 ## Prerequisites
 
@@ -47,6 +47,8 @@ Open **http://localhost:8787**, create a thread, and chat as the customer. Repli
 | `deno task dev:ui` | Runs the dev web harness on `localhost:8787` (auto-restarts on code changes). |
 | `deno task db:init` | Creates/migrates `./data/support.db` from [schema.sql](schema.sql). Idempotent; also runs implicitly on every open. |
 | `deno task test` | Full test suite (~60 tests). No network, no API key needed — the LLM harness and summarizer are tested against pi-ai's faux provider and the echo summarizer. |
+| `deno task wiki:check` | Parses and validates every wiki Markdown page; add `-- --coverage` to regenerate `wiki/coverage.md`. |
+| `deno task wiki:search -- "<query>"` | Runs ranked production wiki retrieval directly, without an LLM. |
 
 ## Environment variables
 
@@ -58,12 +60,19 @@ All optional unless noted. The engine (`deno task start`) reads `.env` automatic
 |---|---|---|
 | `AGENT_MODE` | `llm` | `llm` = real agent; `echo` = deterministic `ECHO: <text>` replies, no key needed. |
 | `LLM_PROVIDER` | `openrouter` | `openrouter` or `google` out of the box (any pi-ai provider id works with its conventional key env). |
-| `LLM_MODEL` | *(provider default)* | `openai/gpt-4o-mini` on OpenRouter; `gemini-2.5-flash` on Google. Any model id from the provider's catalog. |
+| `LLM_MODEL` | *(provider default)* | `openai/gpt-4o-mini` on OpenRouter; `gemini-3.6-flash` on Google. Any model id from the provider's catalog. |
 | `LLM_THINKING` | `off` | Requested reasoning level (`off`\|`minimal`\|`low`\|`medium`\|`high`\|`xhigh`\|`max`). Auto-clamped per model from catalog metadata (`thinking_level_clamped` log), **and** self-corrects at runtime: if the live endpoint still rejects with "reasoning is mandatory", the engine bumps one level, retries, and memoizes (`thinking_level_bumped` log). Non-reasoning models force `off`. |
 | `OPENROUTER_API_KEY` | — | **Required** when `LLM_PROVIDER=openrouter` and `AGENT_MODE=llm`. |
 | `GEMINI_API_KEY` | — | **Required** when `LLM_PROVIDER=google` and `AGENT_MODE=llm`. |
 
 Missing key → the engine exits at startup with the exact fix in the error message.
+
+### Knowledge base
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `KNOWLEDGE_BASE_PATH` | `./wiki` | Directory containing the Markdown wiki pages indexed by `search_knowledge_base`. A path outside `./wiki` needs a matching Deno `--allow-read` permission. |
+| `KNOWLEDGE_BASE_RELOAD` | `0` | `1` checks Markdown mtimes before each search and atomically reloads changed pages; useful during development. Production normally keeps the startup snapshot. |
 
 ### Per-customer memory (spec §10)
 
@@ -223,11 +232,21 @@ Useful during development:
 - **Reset:** stop everything and delete `./data/` for a fresh database and logs.
 - The harness auto-restarts on server-code changes (`--watch`); reload the browser after UI changes.
 
+## Documentation corpus: `wiki/`
+
+`wiki/` holds a synthetic **internal support wiki** for Acme Hotels Inc., the hospitality guest-technology vendor whose 250 support tickets are filed as this repository's issues (FW-001 … FW-250). It exists for the memory evals in `evals/`: the agent needs a documentation baseline to look up, and scenario authors need to know exactly what that baseline contains so that memory tests target what it does *not* contain. Every product fact on the pages is traced to the ticket it came from through a hidden `<!-- evidence: FW-021 -->` comment (the pages read like a normal wiki and the agent never sees ticket numbers); per-hotel details and one-off resolutions are deliberately left out (the exclusion rules are in `wiki/README.md`, together with the list of conventions that are illustrative rather than corpus-derived).
+
+Twenty-two GitHub-wiki-style pages: how the support team works (statuses, escalation triggers `E-`, intake gates `Q-`), one page per product (Acme TV, HSIA guest Wi-Fi, PMS integration, ordering, admin panel, …), and reference pages (confusable symptoms `X-`, unsupported requests `U-`, known issues `K-`, a RU/EN phrasebook). Entries are self-contained and addressable by identifier, so a retrieved fragment carries its own context.
+
+**The knowledge base.** The `wiki/*.md` files themselves are the KB. Page metadata and heading structure define the stable article identifiers and chunk boundaries; hidden `<!-- evidence: FW-nnn -->` comments remain authoring/audit data and are not shown to the agent. `wiki/coverage.md` maps tickets to the pages that reference them.
+
+**Runtime retrieval.** A shared TypeScript loader parses and chunks `wiki/*.md` directly for the runtime, evals, tests, and CLI, then builds an ephemeral SQLite FTS5/BM25 index with relevance thresholds and corpus-revision logging. There is no generated or persistent KB artifact. Search requests do not depend on GitHub or scrape its website; a GitHub-edited wiki can instead be cloned/fetched into the configured local Markdown directory before startup.
+
 ## Layout
 
 ```
 schema.sql            DDL: messages (queue + history + outbound buffer) and memories, with indexes
-fixtures/             mock-connector data: KB articles, CRM customers, deployments
+fixtures/             mock-connector data: CRM customers and deployments
 src/
   config.ts           env-driven configuration (all variables above) + the --memory flag
   main.ts             engine entrypoint: workers + reaper + memory strategy jobs + graceful shutdown
@@ -240,11 +259,13 @@ src/
   logger/             @std/log: console + rotating file sinks, JSON lines
 tools/ui/             dev harness (never deployed): server + single-file web UI
 tests/                deno test suite
+wiki/                 Markdown knowledge base and memory-eval baseline
+evals/                memory-eval scenarios (YAML) and the runner design
 ```
 
 ## Operational notes
 
-- **Permissions:** the engine runs sandboxed — network pinned to the LLM provider hosts, reads pinned to `./data` + `schema.sql` + `./fixtures`, writes to `./data`. `--allow-env`/`--allow-sys` are broad for the engine only (the LLM SDK probes env/system metadata dynamically); see spec §9.1.
+- **Permissions:** the engine runs sandboxed — network pinned to the LLM provider hosts, reads pinned to `./data` + `schema.sql` + `./fixtures` + `./wiki`, writes to `./data`. `--allow-env`/`--allow-sys` are broad for the engine only (the LLM SDK probes env/system metadata dynamically); see spec §9.1.
 - **Delivery guarantees:** at-least-once processing with at-most-one delivered reply per customer message (ownership-fenced commit + unique-index backstop). Retry spend on the LLM is accepted; duplicate customer replies are not.
 - **Multiple engine processes** on one host are safe (claims are atomic in SQLite); the SQLite file must be on a local filesystem — network mounts are unsupported with WAL.
 - **Failures are never silent:** after `MAX_RETRIES`, messages become `failed` and surface to the platform (and the harness's Failed panel) until acknowledged.

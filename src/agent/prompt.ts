@@ -1,9 +1,8 @@
 /**
  * System-prompt builder for the B2B support agent (spec §5/§6):
- * buildSystemPrompt() assembles the DataBridge support persona, the ticket
- * context (thread id + verified customer), the per-customer memory section
- * and memory-tool guidance supplied by the active memory strategy's run
- * handle, per-tool usage guidance, and the grounding / scoping /
+ * buildSystemPrompt() assembles the Acme Hotels support persona, the ticket
+ * context (thread id + verified customer), the rendered per-customer memory
+ * section, per-tool usage guidance, and the grounding / scoping /
  * anti-injection rules the agent must follow.
  */
 export interface PromptContext {
@@ -33,7 +32,7 @@ ${context.memorySection}`
     ? `
 ${context.memoryToolGuidance}`
     : "";
-  return `You are an AI customer support agent for DataBridge, a B2B data-pipeline product. You are handling one support ticket.
+  return `You are an AI customer support agent for Acme Hotels Inc., a hospitality guest-technology vendor. You support Acme TV, TV channels and video streaming, AcmeStream casting, guest Wi-Fi (HSIA), PMS integrations, the Guest App, in-room ordering and Acme Staff, in-room tablets and room control, the admin panel and CMS, HotSign digital signage, and door locks and mobile keys. You are handling one support ticket.
 
 Ticket context:
 - Thread ID: ${context.threadId}

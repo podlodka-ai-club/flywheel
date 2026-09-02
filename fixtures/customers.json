@@ -8,7 +8,7 @@
     "accountManager": "Dana Reyes",
     "primaryContact": { "name": "Jordan Blake", "email": "jordan.blake@google.example" },
     "contractRenewal": "2027-02-01",
-    "notes": "Strategic account. Self-hosted deployment; change freeze every December."
+    "notes": "Strategic account. Multi-property Acme TV and casting deployment; change freeze every December."
   },
   {
     "customerId": "facebook",
@@ -19,7 +19,7 @@
     "accountManager": "Priya Nair",
     "primaryContact": { "name": "Sam Okafor", "email": "sam.okafor@facebook.example" },
     "contractRenewal": "2026-11-15",
-    "notes": "Evaluating Enterprise upgrade. Sensitive to API rate limits during holiday season."
+    "notes": "Evaluating an AcmeStream rollout. Sensitive to guest Wi-Fi demand during holiday season."
   },
   {
     "customerId": "apple",
@@ -30,6 +30,6 @@
     "accountManager": "unassigned",
     "primaryContact": { "name": "Alex Fournier", "email": "alex.fournier@apple.example" },
     "contractRenewal": null,
-    "notes": "Healthcare compliance questions expected; route contract questions to sales."
+    "notes": "Pilot deployment; route contract and licence questions to sales."
   }
 ]

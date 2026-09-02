@@ -1,138 +1,91 @@
 <!-- meta
-id: fsg-home
+id: home
 type: index
-audience: all
-tags: [index, terminology, glossary, products, overview]
+audience: support
+tags: [index, overview, products, acme, support, escalation, terminology, hotel, guest, partner]
 -->
 
-# Aperture Science — Facility Support Group
+# Acme Support Wiki
 
-Internal documentation for the **Facility Support Group (FSG)**, the team inside the
-Enrichment Systems Division responsible for keeping deployed Enrichment Facilities
-operational, compliant, and adequately supplied with morale content.
+Internal documentation for **Acme Support** — the team that keeps the guest-technology platform running at the hotels our partners operate: the interactive TV, casting, guest Wi-Fi, the guest app and in-room ordering, in-room tablets, digital signage, door locks, and the integrations that tie them to the hotel's PMS, POS and task systems.
 
-This wiki is the authoritative reference for how FSG works. Where a page here conflicts
-with a verbally communicated instruction, this wiki wins. Where it conflicts with a
-directive from the Chief Executive Officer, please refer the matter to Legal and continue
-working normally in the meantime.
+This wiki is the reference for *how the products behave* and *how we work a ticket*. It is written so that any single section can be read on its own: every triage row, escalation trigger and glossary entry carries its own context.
 
 ---
 
-## What we support
+## 1. How to use this wiki on a ticket
 
-Aperture licenses the **Aperture Enrichment Platform (AEP)** to Licensed Facility
-Operators, who run Enrichment Facilities on our behalf. Each facility contains some
-number of test chambers, each containing one or more test subjects, each entitled by
-contract to a baseline level of entertainment, network access, nutrition, and door
-functionality.
-
-FSG does not operate facilities. FSG keeps the platform running underneath the operators
-who do. This distinction is the source of approximately 40% of our ticket volume and the
-entire content of the [Integration Boundary Handbook](Integration-Boundary-Handbook).
+1. **Establish the basics** — which property, which surface (TV, WebApp, native app, tablet, Staff app, admin panel, HSIA portal, HotSign), one room or the whole property. The [Ticket Intake Checklist](Ticket-Intake-Checklist) lists the gates (Q-001…Q-008); most stalled tickets are missing one of them.
+2. **Check the hard triggers** in [Escalate or Answer](Escalate-or-Answer). A guest who cannot enter a room, a whole property dark, an allergy note cut short, charges not reaching the folio — these escalate before any diagnosis.
+3. **Find the symptom** on the product page (triage rows T-…), or in [Confusable Symptoms](Confusable-Symptoms) when two causes look alike. Each row says what to check first, who owns it, and what to tell the customer.
+4. **Check version-specific behaviour** in [Known Issues and Release Notes](Known-Issues-and-Release-Notes) before promising a fix, and [Unsupported Requests](Unsupported-Requests-and-Alternatives) before saying yes to a request.
+5. **Answer in the customer's words.** Reporters write in Russian and English; the [Glossary and Phrasebook](Glossary-and-Phrasebook) maps their phrasing to our terms.
 
 ---
 
-## How we work
+## 2. What we support
+
+| Page | Product | What it covers |
+|---|---|---|
+| [Acme TV](Acme-TV) | The interactive TV application on hotel TVs and set-top boxes | Devices, service codes, registration and licences, welcome page, check-in/out behaviour, content on the TV, apps |
+| [TV Channels and Video Streaming](TV-Channels-and-Video-Streaming) | Live channels and video served through the TV server | Multicast and HLS, the VLC test, channel lists, encoders, streamer and streameradmin, welcome and promo videos |
+| [Casting: Chromecast and AirPlay](Casting-Chromecast-and-AirPlay) | AcmeStream | Chromecast and Apple TV casting, session controllers, "All devices busy", encoders, cast licences |
+| [Guest Wi-Fi (HSIA)](Guest-Wi-Fi-HSIA) | Acme HSIA | MikroTik gateways, the HSIA portal, login methods, vouchers, tariffs and speed, DHCP, the captive portal |
+| [PMS Integration](PMS-Integration) | Opera (FIAS/OHIP), Opera Cloud, Protel Air, Shiji, 1C | Check-in/out, guest names, room status, postings, regional API domains, failure modes |
+| [Guest App](Guest-App) | Acme Guest App — web app and native mobile app | QR login, regions, content device types, guest messages, payments and bill, performance |
+| [In-Room Ordering and Staff App](In-Room-Ordering-and-Staff-App) | Shop Orders, Service Requests, Acme Staff | Statuses, notifications, working hours, payments, POS and task-tracker integrations, reports |
+| [In-Room Tablets and Room Control](In-Room-Tablets-and-Room-Control) | BSP / RoomConnect tablets, MAS, RCU / GRMS | Check-in popup, TV control from the tablet, room automation |
+| [Admin Panel and CMS](Admin-Panel-and-CMS) | Old admin panel and the new admin panel (admin v2) | Regions, login and SSO, users and roles, publishing rules, media specs, templates, reports |
+| [HotSign Digital Signage](HotSign-Digital-Signage) | Acme HotSign | Signage CMS, playlists, Raspberry Pi players, builds, troubleshooting |
+| [Door Locks and Mobile Keys](Door-Locks-and-Mobile-Keys) | OS Access, Upkey, SmartPass, mobile key (SEOS) | Cards and encoders, areas, emergencies, provider boundaries, support geography |
+
+### What we do not own
+
+We diagnose to the boundary and hand over with evidence. The hotel or its contractor owns the access points, switches, cabling and the internet uplink; the hotel owns the TVs and their firmware, power and network segments; the PMS, POS, task-tracker and lock/key vendors own their systems; the channel provider owns the streams. The [Support Operations](Support-Operations) page describes the boundary and the [Remote Access and Connectivity](Remote-Access-and-Connectivity) page describes what we can actually reach.
+
+---
+
+## 3. How we work
 
 | Page | Read this when |
 |---|---|
-| [Support Tiers, Severity and Escalation](Support-Tiers-Severity-and-Escalation) | You need to know how fast something must be fixed and who to wake up |
-| [Facility-Down Incident Runbook](Facility-Down-Incident-Runbook) | An entire facility is dark and subjects are in chambers |
-| [Integration Boundary Handbook](Integration-Boundary-Handbook) | The fault might belong to someone who is not us |
-| [Request Intake and Triage Standard](Request-Intake-and-Triage-Standard) | A request has arrived and needs to become a well-formed ticket |
-| [Content Publishing and Change Control](Content-Publishing-and-Change-Control) | An operator wants something different on the chamber displays |
+| [Support Operations](Support-Operations) | You need the channels, the Zoho statuses, the teams and who takes what, the partner model, or how to close non-support traffic |
+| [Escalate or Answer](Escalate-or-Answer) | You are deciding whether a ticket is escalated, answered, questioned or closed — with the hard triggers E-001…E-010 and severity |
+| [Ticket Intake Checklist](Ticket-Intake-Checklist) | A ticket arrived and something is missing — property, surface, scope, example, evidence |
+| [Remote Access and Connectivity](Remote-Access-and-Connectivity) | You cannot reach a server, a gateway or a PMS host, or a partner needs access |
+| [Updates, Maintenance and Change Control](Updates-Maintenance-and-Change-Control) | A fix needs a TV app, firmware, server or stream-service update, or a hotel asks for a change freeze |
 
-Product documentation is indexed separately below.
-
----
-
-## The product line
-
-Five products, listed by share of support volume. Together they account for roughly
-three quarters of everything FSG handles.
-
-| Page | Product | Share |
-|---|---|---|
-| [Chamber Morale Display](Chamber-Morale-Display) | The in-chamber screen and everything on it | 39% |
-| [Subject Network Access](Subject-Network-Access) | Connectivity, authentication, entitlement | 13% |
-| [Requisition Service](Requisition-Service) | Subject requests and their delivery to staff | 12% |
-| [Facility Console](Facility-Console) | The operator's interface to all of the above | 10% |
-| [Aperture Control](Aperture-Control) | Chamber apertures and the credentials that open them | 4% |
-
-Aperture Control is last by volume and first by consequence. It is the only product where
-a defect can leave a subject unable to leave a chamber, and its tickets carry the highest
-severity per ticket in the estate.
-
-Two further surfaces have no page of their own because their volume sits inside the
-products above: **Subject Device Mirroring** is documented under the display, and the
-**Technician Companion App** under requisitions. The **Subject Intake & Disposition
-System** is third-party throughout and is covered by the
-[Integration Boundary Handbook](Integration-Boundary-Handbook).
-
----
-
-## Triage reference
-
-Written for fast decisions rather than reading start to finish. Every entry is
-self-contained and citable by identifier, so it survives being retrieved on its own.
+## 4. Reference
 
 | Page | Answers |
 |---|---|
-| [Escalate or Answer](Escalate-or-Answer) | Escalate, ask, answer, or close — with the hard triggers |
-| [Confusable Symptoms Index](Confusable-Symptoms-Index) | Two faults look identical; which one is this? |
-| [Unsupported Requests and Alternatives](Unsupported-Requests-and-Alternatives) | Things we do not do, and what to offer instead |
-| [Minimum Viable Ticket](Minimum-Viable-Ticket) | What must be known before work can start |
-| [Symptom Vocabulary (RU/EN)](Symptom-Vocabulary-RU-EN) | What reporters write, in either language, mapped to our terms |
+| [Confusable Symptoms](Confusable-Symptoms) | Two faults look identical — which one is this? (X-…) |
+| [Unsupported Requests and Alternatives](Unsupported-Requests-and-Alternatives) | Things we do not do, and what to offer instead (U-…) |
+| [Known Issues and Release Notes](Known-Issues-and-Release-Notes) | Version-specific bugs, recent incidents, hardware end-of-life notes (K-…), as of August 2026 |
+| [Licensing and Commercial Requests](Licensing-and-Commercial-Requests) | TV and Cast licences, how counts behave, buying more, contracts and contacts |
+| [Glossary and Phrasebook](Glossary-and-Phrasebook) | Products, abbreviations, support vocabulary, Russian/English symptom phrasing |
 
-Identifier prefixes: **E-** escalation rules, **X-** confusable pairs, **U-** unsupported
-requests, **Q-** intake gates, **T-** per-product triage rows.
-
----
-
-## Standing terminology
-
-New FSG staff consistently misuse these terms in customer-facing correspondence, which
-creates contractual exposure. Learn them before your first shift.
-
-| Term | Abbrev. | What it is |
-|---|---|---|
-| Enrichment Facility | — | A deployed site. Referred to externally as Facility A, Facility B, etc. Never by its commercial name in a ticket. |
-| Licensed Facility Operator | LFO | The partner organisation that runs a facility. Our contractual counterparty. Files most of our tickets. |
-| Test Subject | — | An occupant of a chamber. Not a "guest". Not a "customer". Not, per Legal, a "volunteer". |
-| Test Chamber | — | A single subject-occupied unit. Our licensing counts these. |
-| Chamber Morale Display | CMD | The in-chamber screen. Delivers channels, facility information, and mandated encouragement. |
-| Subject Network Access | SNA | Subject-facing network service, including the authentication portal and access vouchers. |
-| Subject Intake & Disposition System | SIDS | The operator's records system. Owns arrivals, chamber assignment, departures, and final disposition. Third-party in almost all deployments. |
-| Nutrient Requisition Terminal | NRT | The kitchen-side ordering system that receives requisitions placed from the CMD. |
-| Aperture Control | — | Chamber door actuation and credentialing. Includes physical and subject-device credentials. |
-| Facility Console | — | The operator's web administration interface. Where content and configuration are authored. |
-| Technician Companion App | TCA | Handheld application used by facility staff to receive and close requisitions and tasks. |
-| Subject Device Mirroring | SDM | Casting from a subject's own device to the CMD. Separately licensed from the CMD itself. |
+**Identifier prefixes.** `E-` escalation triggers · `Q-` intake gates · `X-` confusable pairs · `U-` unsupported requests · `K-` known issues · `T-TV`, `T-CH`, `T-CAST`, `T-WIFI`, `T-NET`, `T-PMS`, `T-APP`, `T-ORD`, `T-TAB`, `T-ADM`, `T-SIGN`, `T-LOCK` per-product triage rows.
 
 ---
 
-## Volume and shape of the work
+## 5. Standing terminology
 
-FSG handled **250 tickets** across July and August 2026 — 129 and 121 respectively. This
-is our steady state and should be treated as the planning baseline.
+| Term | Meaning |
+|---|---|
+| Property / hotel | One site. Partners run several; always confirm which one a ticket is about. |
+| Partner | The integrator, reseller or management company that opens most of our tickets on behalf of hotels, often forwarding the hotel's own words. |
+| Surface | Where the symptom shows: TV app, WebApp, native app, tablet (BSP), Staff app, old or new admin panel, HSIA portal, HotSign CMS. |
+| TV server | The on-prem Ubuntu server (or cloud deployment) behind Acme TV — web front end, PMS interface, streamer, VPN client. |
+| Service codes | Remote-control codes typed from the TV main menu: 1800 diagnostic page (Network, Device, Authorization), 1169 logs, 1105 registration reset, 100 content refresh. |
+| Publish | Content and configuration changes reach devices only after Publish; allow up to 20 minutes or force with code 100 / a power cycle. |
+| Region | Our cloud runs in EU, NA and RU regions; admin panels, API domains and app servers are regional and an account lives in one of them. |
+| Licence | TV licences and Cast licences are separate counts; tablets are counted separately from TVs. |
 
-Arrival channel:
-
-| Channel | Volume | Share |
-|---|---|---|
-| Email | 196 | 78% |
-| Web form | 48 | 19% |
-| Chat | 6 | 2% |
-
-Email dominance is deliberate and is not a problem to be solved. Operators forward
-threads that already contain their own internal correspondence, their subcontractors'
-correspondence, and occasionally correspondence from a third-party vendor who has already
-diagnosed the fault. That context is valuable. Do not push operators toward the web form
-in the belief that it produces cleaner tickets. It produces shorter ones.
+The full list is in the [Glossary and Phrasebook](Glossary-and-Phrasebook).
 
 ---
 
-## Escalation, in one line
+## 6. In one line
 
-If subjects are in chambers and a chamber cannot be opened, stop reading this wiki and
-page the on-call Facility Liaison immediately. Everything else can wait fifteen minutes.
+If a guest cannot enter a room, an entire property is dark, an allergy note reaches the kitchen cut short, or charges are not reaching the folio — escalate first and diagnose second. Everything else can wait for the intake checklist.

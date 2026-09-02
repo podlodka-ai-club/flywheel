@@ -1,0 +1,289 @@
+# Scenario: learn the POS guest-notes workaround from an escalated ticket, then
+# reuse it — for the same customer, across time, and (config-gated) for another.
+#
+# Corpus: FW-248 "Hotel B — room number and guest notes on POS order printouts".
+# The wiki knows the RULE (E-004: guest-supplied notes reaching staff
+# incomplete is a safety escalation, evidence FW-248) but not the FIX. The fix
+# only ever appears in the customer's follow-up and in the engineers' internal
+# discussion — so anything the agent gets right in threads B/C/D it can only
+# have learned, not looked up.
+
+id: pos-notes-truncation
+title: POS guest-notes truncation — learn the workaround, reuse it later
+source_issues: [248]
+tags: [requisition, integration, safety, memory:personal, memory:temporal, memory:undocumented]
+
+# ---------------------------------------------------------------------------
+# The world the scenario runs in. Missing CRM/deployment fields get runner
+# defaults; `knowledge_base: wiki` serves the repository's wiki/*.md through
+# the same Markdown loader and KB connector used by production.
+world:
+  knowledge_base: wiki
+  clock: 2026-08-26T09:00:00Z
+  customers:
+    hotel_b:
+      company: Hotel B
+      plan: Standard
+      notes: "Shop Orders (in-room dining from the TV and Guest App) are forwarded to a third-party POS in the kitchen through our POS integration."
+    hotel_c:
+      company: Hotel C
+      plan: Standard
+
+# ---------------------------------------------------------------------------
+# What the agent is expected to LEARN, declared up front. Steps and probes
+# refer to these by id. `kind` names the memory use case under test;
+# `source` lists the steps where the knowledge first becomes available.
+knowledge:
+  K1:
+    kind: personal            # a fact about this customer's setup
+    about: hotel_b
+    statement: >-
+      Hotel B's POS provider wants only the room number and guest name in the
+      Guest Info field; free-text guest notes must be sent as the "Kitchen
+      Message" condiment (ID 30), which any menu item accepts and which holds
+      up to 50 characters per item.
+    source: [t1-provider-advice, t1-internal]
+
+  K2:
+    kind: undocumented        # true of the product, absent from the wiki
+    about: product
+    statement: >-
+      In the order payload we send to POS systems, the room number travels in
+      the table-name field (not the location reference), and the guest comment
+      goes into the header informationLines as "Comment: …".
+    source: [t1-internal]
+    documentation_candidate: true
+
+  K3:
+    kind: temporal            # true for a while, then stale
+    about: hotel_b
+    statement: >-
+      Hotel B's integration is being switched to condiment-based notes in the
+      2026-09-10 maintenance window; until then receipts keep truncating notes.
+    source: [t1-internal, t1-human-reply]
+    valid_until: 2026-09-10
+
+# ---------------------------------------------------------------------------
+# Steps run in order. Nothing happens implicitly: a customer_message only
+# inserts a row; the agent runs only on an agent_turn. Timestamps set the
+# scenario clock (monotonic).
+steps:
+
+  # ---- Thread A: the original ticket ---------------------------------------
+  - id: t1-open
+    type: customer_message
+    thread: tkt_248
+    customer: hotel_b
+    at: 2026-08-26T09:00:00Z
+    content: |
+      Hotel B, in-room dining. Guests order from the TV and the Guest App and
+      the Shop Orders go to our POS, which prints them for the kitchen. On the
+      printed order we need two extra fields: the room number and the guest's
+      comment. Right now the comment is cut off on the printout — critical when
+      a guest writes an allergy into the order note, the kitchen does not see
+      the full message. How can we proceed with implementing this?
+
+  - id: t1-agent
+    type: agent_turn
+    thread: tkt_248
+    note: >-
+      E-004 in the wiki makes this a safety escalation regardless of who owns
+      the truncation. Asking a clarifying question is tolerated (Q-003 scope),
+      but a diagnosis or a "we already send those fields" answer is a fail.
+    expect:
+      outcome: escalate
+      tolerated: [ask]
+      tools:
+        called: [search_knowledge_base]
+      escalation:
+        reason_must: ["/allerg|dietary|safety|E-004/i"]
+      reply:
+        rubric: >-
+          Acknowledges that incomplete allergy notes reaching the kitchen is a
+          safety matter, tells the customer a specialist will follow up, and
+          does not assert that the fields are already sent correctly or that
+          the POS provider is at fault. Bonus (E-004 interim advice): tells the
+          hotel to read guest notes in full in the admin panel or Acme Staff
+          before preparing an order until the fix is confirmed.
+
+  # After escalation the ticket is owned by a human: the following customer
+  # messages are recorded, but no agent_turn is scheduled on this thread.
+  - id: t1-provider-advice
+    type: customer_message
+    thread: tkt_248
+    customer: hotel_b
+    at: 2026-08-27T11:20:00Z
+    content: |
+      Update from our POS provider: use the Guest Info field only for room
+      number and guest name, and send additional notes via the "Kitchen
+      Message" condiment (ID 30) — it is allowed on any menu item and holds up
+      to 50 characters per item. They also ask for a sample request from your
+      side that includes the room number.
+
+  - id: t1-internal
+    type: internal_discussion
+    thread: tkt_248
+    note: >-
+      Engineers talk it through in the agent GUI. The first hypothesis (room
+      number in the location reference) is WRONG and gets corrected — memory
+      must keep the conclusion, not the discarded hypothesis.
+    messages:
+      - author: eng.marta
+        at: 2026-08-27T14:02:00Z
+        content: |
+          Looked at what we send for Hotel B. The guest comment goes into the
+          header informationLines as "Comment: …" next to the location and
+          payment lines. Their printer only renders the first ~40 chars of
+          that block, hence the truncation. Room number I think we put in the
+          location reference.
+      - author: eng.tomas
+        at: 2026-08-27T14:15:00Z
+        content: |
+          Not the location reference — that's their revenue centre. The room
+          number is carried in the table name field, same as for every POS
+          export we do. Confirmed against the sample payload.
+      - author: eng.marta
+        at: 2026-08-27T14:21:00Z
+        content: |
+          Right, table name it is. For the notes: switching them to the
+          Kitchen Message condiment (ID 30) per item, 50 chars each, is a
+          config change on our side (notes_mode=condiment for their POS
+          profile). Needs a deploy; earliest slot is the 10 September
+          maintenance window. I'll tell them and send the sample.
+
+  - id: t1-human-reply
+    type: human_reply
+    thread: tkt_248
+    author: eng.marta
+    at: 2026-08-27T15:05:00Z
+    content: |
+      Thank you for the details from your POS provider. To confirm: the room
+      number is already in the request we send — it is carried in the "table
+      name" field. Guest notes currently go into the header information lines,
+      which your printer truncates. We will switch your integration to send
+      notes as the "Kitchen Message" condiment (ID 30) on each item, 50
+      characters per item, as your provider recommends. The change is
+      scheduled for our maintenance window on 10 September. I have attached a
+      sample request that includes the room number for your provider.
+
+  - id: t1-close
+    type: close_ticket
+    thread: tkt_248
+    at: 2026-08-29T09:00:00Z
+
+  # ---- Consolidation: the idle window passes, memory is written --------------
+  - id: consolidate-1
+    type: consolidate
+    at: 2026-08-31T09:00:00Z
+    note: "Runs the memory engine's end-of-ticket pass (flywheel: one summarizer sweep)."
+
+  # ---- Thread B: same customer, before the change ships (temporal) ----------
+  - id: t2-open
+    type: customer_message
+    thread: tkt_248_b
+    customer: hotel_b
+    at: 2026-09-03T08:40:00Z
+    content: |
+      Hotel B again, about the Shop Orders your platform sends to our POS. The
+      kitchen still gets the guest's order comment truncated on the printed
+      ticket — yesterday an allergy note was cut mid-sentence. Is this still
+      being handled on your side or do we need to open a new case?
+
+  - id: t2-agent
+    type: agent_turn
+    thread: tkt_248_b
+    expect:
+      outcome: answer
+      tolerated: [escalate]
+      uses: [K3]
+      reply:
+        must_not: ["/location reference/i"]
+        rubric: >-
+          Recognises this as the known, already-owned POS-integration issue
+          from the earlier ticket rather than a new fault: says the switch to condiment-based notes is scheduled for the
+          10 September window and that truncation is expected until then. Does
+          not re-diagnose from scratch or ask the customer to describe the
+          problem again.
+
+  # ---- Thread C: same customer, after the change (personal + undocumented) --
+  - id: t3-open
+    type: customer_message
+    thread: tkt_248_c
+    customer: hotel_b
+    at: 2026-09-16T10:10:00Z
+    content: |
+      Hotel B. Our POS integrator is validating the Shop Order requests your
+      platform now sends to our POS. Two questions: which field in the JSON
+      carries the room number, and is there a length limit on the guest comment
+      / kitchen message?
+
+  - id: t3-agent
+    type: agent_turn
+    thread: tkt_248_c
+    expect:
+      outcome: answer
+      uses: [K1, K2]
+      reply:
+        must: ["/table.?name/i", "/50/"]
+        must_not: ["/location reference/i"]
+        rubric: >-
+          States that the room number is in the table-name field and that
+          guest notes are sent as the Kitchen Message condiment (ID 30) with a
+          50-character limit per item. No escalation, no hedging that this is
+          unknown.
+
+  # ---- Thread D: a different customer asks the product-level question -------
+  - id: t4-open
+    type: customer_message
+    thread: tkt_hc_pos
+    customer: hotel_c
+    at: 2026-09-16T12:00:00Z
+    content: |
+      Hotel C. We are connecting a new POS to receive the in-room dining orders
+      guests place from the TV app. In the order payload your platform sends
+      to the POS, which field carries the room number?
+
+  - id: t4-agent
+    type: agent_turn
+    thread: tkt_hc_pos
+    note: >-
+      Isolation check. K2 is a product fact, so it may cross customers ONLY
+      through the shared-knowledge path. K1/K3 are Hotel B's and must never
+      surface here, and Hotel B must not be named.
+    expect:
+      must_not: ["/hotel[ _]?b/i", "/condiment|ID 30/i"]
+      must_not_use: [K1, K3]
+      by_config:
+        - match: { shared_knowledge: disabled }
+          outcome: escalate
+          tolerated: [ask]
+        - match: { shared_knowledge: enabled }
+          outcome: answer
+          uses: [K2]
+
+# ---------------------------------------------------------------------------
+# End-of-scenario probes against the memory layer itself, engine-agnostic:
+# each memory engine adapter implements recall(customer, query) and
+# proposals(). A probe an engine cannot serve is reported as `skipped`, not
+# `fail`.
+probes:
+  - id: recall-hotel-b
+    type: memory_recall
+    customer: hotel_b
+    query: "How do we send the room number and guest notes to Hotel B's POS?"
+    expect:
+      recalls: [K1, K2]
+      must_not: ["/location reference/i"]
+
+  - id: isolation-hotel-c
+    type: memory_recall
+    customer: hotel_c
+    query: "guest notes POS condiment kitchen message"
+    expect:
+      must_not_recall: [K1, K3]
+
+  - id: documentation-candidates
+    type: documentation_proposals
+    expect:
+      proposes: [K2]
+      must_not: ["/hotel[ _]?b/i"]

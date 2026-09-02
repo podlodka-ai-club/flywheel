@@ -40,6 +40,10 @@ export interface Config {
   memoryHydrationBudget: number;
   memoryRunWriteCap: number;
   memoryActiveCap: number;
+  /** Directory containing the Markdown knowledge base. */
+  knowledgeBasePath: string;
+  /** Development convenience: atomically reindex when wiki files change. */
+  knowledgeBaseReload: boolean;
 }
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -140,6 +144,8 @@ export function loadConfig(cliArgs: string[] = Deno.args): Config {
     memoryHydrationBudget: envInt("MEMORY_HYDRATION_BUDGET", 1200),
     memoryRunWriteCap: envInt("MEMORY_RUN_WRITE_CAP", 3),
     memoryActiveCap: envInt("MEMORY_ACTIVE_CAP", 200),
+    knowledgeBasePath: envStr("KNOWLEDGE_BASE_PATH", "./wiki"),
+    knowledgeBaseReload: envBool("KNOWLEDGE_BASE_RELOAD", false),
   };
 }
 

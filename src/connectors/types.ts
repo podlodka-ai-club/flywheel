@@ -1,9 +1,9 @@
 /**
  * Connector seam between support tools and external systems.
  *
- * Tools depend ONLY on these interfaces. The mock implementations
- * (./mock.ts) simulate outbound requests against local fixtures; swapping in
- * real clients (Confluence/Notion wiki, a CRM, a deployment-telemetry API)
+ * Tools depend ONLY on these interfaces. The knowledge base is backed by the
+ * local Markdown wiki; the remaining mock implementations simulate outbound
+ * requests against local fixtures. Swapping in real CRM or deployment clients
  * means implementing the same interfaces — the tools don't change.
  */
 
@@ -12,6 +12,10 @@ export interface KbArticle {
   title: string;
   tags: string[];
   body: string;
+  /** GitHub Wiki page basename, e.g. `Acme-TV`. */
+  page: string;
+  /** Human-readable page/section attribution. */
+  source: string;
 }
 
 export interface KbSearchResult {
@@ -50,7 +54,7 @@ export interface CustomerSetup {
   knownIssues: string[];
 }
 
-/** Documentation base (wiki / Confluence / Notion / …). */
+/** Searchable documentation base. */
 export interface KnowledgeBaseConnector {
   search(query: string, limit: number, signal?: AbortSignal): Promise<KbSearchResult[]>;
 }
