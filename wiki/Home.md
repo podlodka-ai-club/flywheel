@@ -86,12 +86,6 @@ The full list is in the [Glossary and Phrasebook](Glossary-and-Phrasebook).
 
 ---
 
-## 6. The ticket landscape
-
-Support handled **250 tickets** in July and August 2026 (129 and 121). Email brings 78% of them, the web form 19%, chat 2%. Roughly half are technical issues, a fifth are administrative or automated messages that only need closing, and the rest are how-to questions, content updates and feature requests. Most tickets arrive from partners, which is why "which property?" is the first question on this wiki.
-
----
-
-## 7. In one line
+## 6. In one line
 
 If a guest cannot enter a room, an entire property is dark, an allergy note reaches the kitchen cut short, or charges are not reaching the folio — escalate first and diagnose second. Everything else can wait for the intake checklist.
