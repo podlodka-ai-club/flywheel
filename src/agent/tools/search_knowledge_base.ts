@@ -38,7 +38,9 @@ export function buildSearchKnowledgeBase(context: ToolRunContext): AgentTool {
         );
       }
       const text = results
-        .map(({ article }) => `# ${article.title} [${article.id}]\n${article.body}`)
+        .map(({ article }) =>
+          `# ${article.title} [${article.id}]\nSource: ${article.source} (${article.page})\n${article.body}`
+        )
         .join("\n\n");
       return textResult(text, { resultCount: results.length, ids: results.map((r) => r.article.id) });
     },

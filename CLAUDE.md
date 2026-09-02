@@ -4,7 +4,7 @@ Flywheel is a B2B AI customer-support agent framework: Deno 2.x, SQLite (WAL) as
 
 **Document map (do not duplicate their content — keep them true):**
 - `specification.md` — the binding architecture. Every design decision lives here (§3.2 integration contract, §4 queue mechanics, §6 tools, §10 memory design).
-- `milestones.md` — the delivery plan. Milestone **numbers are stable identifiers; execution order is stated in the intro** (currently M7 memory → M6 hardening → M8 shared knowledge). Check it for what's done and what's next.
+- `milestones.md` — the delivery plan. Milestone **numbers are stable identifiers; execution order is stated in the intro** (currently M6 hardening → M8 shared knowledge; M5.5 wiki search is complete). Check it for what's done and what's next.
 - `README.md` — developer onboarding: tasks, every env var, troubleshooting.
 
 ## Working agreement with the user
@@ -51,5 +51,5 @@ Flywheel is a B2B AI customer-support agent framework: Deno 2.x, SQLite (WAL) as
 - `deno task test` (network-free, no key needed) and `deno check src/ tools/ tests/` must both pass before handing anything to the user.
 - `AGENT_MODE=echo` = free end-to-end runs. Fault markers (echo-only, `DEV_FAULTS=1`): `[[sleep:ms]]` every attempt, `[[sleep_once:ms]]` first attempt only (recovery demos need this — a plain sleep longer than the lease starves into `failed`), `[[fail]]` throws.
 - `engine_started` logs the pid (for `kill -9` drills). The reaper interval auto-clamps to ≤ half the lease.
-- The mock knowledge base reads the generated Acme Hotels support corpus at `wiki/kb_entries.json`; customer/deployment fixtures describe several Acme hospitality products. Customer ids are whatever `fixtures/customers.json` keys say (currently `google`, `facebook`, `apple`) — the mock CRM looks up by **key**, and the harness composer datalist comes from `listCustomers()`.
+- The knowledge base is loaded directly from `wiki/*.md` into an ephemeral FTS5 index; there is no generated KB artifact. Customer/deployment fixtures describe several Acme hospitality products. Customer ids are whatever `fixtures/customers.json` keys say (currently `google`, `facebook`, `apple`) — the mock CRM looks up by **key**, and the harness composer datalist comes from `listCustomers()`.
 - Browser-automation quirk: synthetic Enter keypresses don't submit the harness composer (real keyboards work) — click the Send button when driving the UI.

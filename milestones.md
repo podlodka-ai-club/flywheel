@@ -1,6 +1,6 @@
 # Implementation Milestones
 
-Milestones M1–M8 (plus the M3.5 logging addendum), each ending in something runnable that you verify by hand before we continue. **Execution order: M1 → M5, then M7 (memory), then M6 (hardening), then M8 (shared knowledge)** — M6 and M7 are deliberately swapped so the hardening pass covers the memory subsystem; the numbers stay stable as identifiers. Milestones 1–3 require **no LLM API key**: the engine runs with a deterministic echo agent so all queue mechanics can be exercised for free. The real agent arrives in Milestone 4.
+Milestones M1–M8 (plus the M3.5 logging and M5.5 wiki-search addenda), each ending in something runnable that you verify by hand before we continue. **Execution order: M1 → M5, then M7 (memory), M5.5 (real wiki search), M6 (hardening), and M8 (shared knowledge)** — M6 and M7 are deliberately swapped so the hardening pass covers the memory subsystem, and M5.5 closes the mock retrieval gap before that pass; the numbers stay stable as identifiers. Milestones 1–3 require **no LLM API key**: the engine runs with a deterministic echo agent so all queue mechanics can be exercised for free. The real agent arrives in Milestone 4.
 
 Testing happens through a **dev web harness** (`tools/ui/`) that simulates the external support platform — ingest and dispatcher — which is out of scope for the core per [specification.md](specification.md) §3.2. It is a separate Deno process from the engine, sharing the SQLite file just like a real co-located adapter would, so every test session also exercises the multi-process WAL contract. No frontend framework, no build step: one `Deno.serve` server with a thin JSON API over the data-access layer, serving a single static HTML page (vanilla JS, ~1s polling).
 
@@ -137,7 +137,7 @@ Your testing loop: `deno task start` (engine) in one terminal, `deno task dev:ui
 **Goal:** the support tools running behind a mock-vs-real connector seam, with hard customer scoping and the escalation contract. (Tool set defined with the product owner: documentation base, CRM info, customer deployment state — replacing the spec's original e-commerce `lookup_order`.)
 
 **Build:**
-- **Connector seam** (`src/connectors/`): typed client interfaces (`KnowledgeBaseConnector`, `CrmConnector`, `DeploymentConnector`) with mock implementations that behave like external calls — async, simulated latency, `connector_request` logs — against the Acme Hotels support-wiki export plus three customer fixtures. Real wiki/CRM/telemetry clients later implement the same interfaces; tools don't change.
+- **Connector seam** (`src/connectors/`): typed client interfaces (`KnowledgeBaseConnector`, `CrmConnector`, `DeploymentConnector`) with mock implementations that behave like external calls — async, simulated latency, `connector_request` logs — against a generated bootstrap snapshot of the Acme Hotels support wiki plus three customer fixtures. The snapshot was sufficient to prove the connector/tool seam, but is not the intended knowledge-base boundary; M5.5 replaces it with direct `wiki/*.md` loading and removes the snapshot. Real CRM/telemetry clients later implement the other interfaces; tools don't change.
 - **Tools** (`src/agent/tools/`, one file per tool, assembled in `index.ts`), built per run and closed over the verified identity:
   - `search_knowledge_base(query, limit?)` — documentation search (wiki/Confluence/Notion stand-in)
   - `lookup_customer_account()` — CRM record; **no id parameter, hard-bound to the verified customer**
@@ -153,6 +153,37 @@ Your testing loop: `deno task start` (engine) in one terminal, `deno task dev:ui
 4. "You charged us twice — I want a human" → reply with the ⚠ escalated badge, customer-safe text, `metadata.escalated` visible in the DB view.
 
 **Automated tests:** each tool against the mock connectors, empty-result honesty, no-id-parameter scoping property, unverified/unknown-customer failures, escalation state, and a faux-provider e2e proving tool results reach the model and the escalation flag lands on reply metadata.
+
+---
+
+## M5.5 — Real Markdown wiki search (added on request)
+
+**Goal:** replace the generated bootstrap snapshot and fixture-style token counter behind `search_knowledge_base` with a real ranked full-text search that reads the `wiki/*.md` documentation directly. Search must be useful, measurable, network-independent at request time, and honest when the corpus has no answer.
+
+**Source decision:** `wiki/*.md` in this repository remains the authoring source of truth; GitHub Wiki is its published mirror. The runtime searches a local index, not GitHub's website on every tool call. GitHub exposes a wiki as a separate Git repository (`<repo>.wiki.git`), so a deployment that treats GitHub as the editing surface can clone/fetch it into a local directory and feed the same indexing pipeline. We will not scrape GitHub's web-search HTML or make agent replies depend on GitHub availability, authentication, rate limits, or indexing lag.
+
+**Build:**
+- **Direct Markdown loader:** add a TypeScript wiki loader/chunker used by production, tests, evals, and the diagnostic CLI. It enumerates `*.md` in `KNOWLEDGE_BASE_PATH`, excludes non-content files (`README.md`, `coverage.md`, `_Sidebar.md`, `_Footer.md`), reads page metadata, and produces one self-contained article per `###` entry or eligible `##` section. It preserves stable `id`, `title`, `tags`, `body`, `page`, and `source` fields in memory; HTML metadata/evidence comments never enter agent-visible text.
+- **Validation at the boundary:** the loader fails clearly on missing metadata, duplicate identifiers, empty corpora, malformed content, and broken internal wiki links. Extract the existing coverage-report behavior into a Markdown maintenance command (`wiki:check`, optionally `--coverage`) so validation does not require or produce a search artifact.
+- **Remove the bootstrap export:** delete `wiki/kb_entries.json` and retire `wiki/build_kb.py` after its validation/coverage responsibilities move to the Markdown loader or maintenance command. Remove every runtime permission, watcher, eval, test, README, and publishing-script dependency on the JSON file. There is no generated KB or manifest to keep in sync.
+- **Real search index:** add a `LocalWikiConnector` behind the existing `KnowledgeBaseConnector`. At engine startup it parses the Markdown and builds an in-memory SQLite FTS5 index using the Unicode/Porter tokenizer. Use BM25 with explicit field weights (title and identifier highest, tags next, body last), stop-word filtering, safe query construction, prefix matching for useful partial terms, and boosts for exact identifiers and phrases.
+- **Relevance contract:** retrieve a wider candidate set, rerank by BM25 plus query-term coverage, and apply a minimum relevance/coverage threshold before enforcing `limit`. A match on one common word must not turn an unrelated article into an answer. Empty/stop-word-only/overlong queries return a controlled miss; malformed FTS syntax from customer text never reaches SQLite as syntax.
+- **Runtime wiring:** split the wiki connector from the other fixture-backed connectors and make local wiki search the default in LLM mode while CRM, deployment, and ticketing may remain mocked. Keep dependency injection for tests. Missing or invalid wiki data fails fast at startup instead of silently degrading to an empty knowledge base.
+- **Freshness and GitHub boundary:** hash the ordered Markdown filenames and bytes and log that value as the corpus revision. In development, detect changed Markdown mtimes before the next search and replace the parsed corpus/index atomically; production keeps the startup snapshot until restart. Publishing remains explicit and one-way. If GitHub later becomes the editing surface, clone/fetch `<repo>.wiki.git` into `KNOWLEDGE_BASE_PATH` before startup; automating that deployment concern is outside this local-search milestone and never part of an individual request.
+- **Configuration and diagnostics:** add `KNOWLEDGE_BASE_PATH` (default `./wiki`) and the corresponding least-privilege read permissions/env allowlists. Add `deno task wiki:search -- "<query>"` to print ranked ids, scores, and sources through the production connector without involving an LLM; this is the tuning and operator smoke-test path.
+- **Observability:** `connector_request` records `source=local_markdown`, corpus revision, candidate count, result count, and duration; `tool_executed` includes result count. Do not log article bodies. The tool result keeps stable article ids and adds human-readable page/source attribution so answers can be audited.
+- **Quality benchmark:** add a versioned retrieval set of representative customer phrasings, expected article ids, and deliberate no-answer queries. Gate the milestone on at least 90% Recall@3 and 0 false positives for the no-answer set; report MRR as a diagnostic. Include morphology, punctuation/quotes, identifiers, common words, and multi-topic queries.
+- **Extension seam, not scope:** keep article loading and ranking separate so a later embedding or hybrid reranker can be added without changing `search_knowledge_base`. Embeddings and a live GitHub-search adapter are not required unless the benchmark shows lexical retrieval is insufficient.
+
+**You verify:**
+1. Ask the existing content-publication question → `T-TV-09` is in the top three, with its wiki page/source shown; Logs identify the local corpus revision and contain no simulated latency or `mock: true` for the KB call.
+2. Search paraphrases such as "the screens retain yesterday's material after I pushed changes" and "guest wireless captive portal will not appear" → the expected TV/Wi-Fi troubleshooting entries rank in the top three.
+3. Search only common words (`the and how to`) and an undocumented topic (`quantum blockchain espresso`) → both return the explicit no-documentation response, not an arbitrary page.
+4. Edit a local wiki entry → the dev connector reloads it before the next search (or production picks it up after restart), a unique phrase from the edit becomes searchable, and the logged corpus revision changes. No generation step is required.
+5. Run with outbound network unavailable → wiki search still works. A separately cloned GitHub wiki directory remains searchable after GitHub goes offline.
+6. Run the retrieval benchmark and the full suite → the quality thresholds pass and existing tool/agent behavior remains green.
+
+**Automated tests:** Markdown parsing/chunking and validation; comment/evidence stripping; broken-link and duplicate-id failures; FTS query escaping; stop-word and empty queries; exact-id, stemming, title/tag/body weighting, reranking and limit behavior; relevance-threshold misses; cancellation; reload/revision behavior; benchmark Recall@3/MRR; default runtime connector wiring; eval `knowledge_base: wiki` using the Markdown loader; faux-provider e2e proving retrieved wiki text and attribution reach the model; repository assertion that the retired JSON export is absent.
 
 ---
 
@@ -185,7 +216,7 @@ Your testing loop: `deno task start` (engine) in one terminal, `deno task dev:ui
 
 ## M6 — Hardening & operations
 
-**Goal:** production posture — clean shutdown, locked-down permissions, maintenance, docs, and a full end-to-end suite. **Runs after M7**, so the hardening pass and E2E suite cover the memory subsystem as well.
+**Goal:** production posture — clean shutdown, locked-down permissions, maintenance, docs, and a full end-to-end suite. **Runs after M7 and M5.5**, so the hardening pass and E2E suite cover both the memory subsystem and real wiki retrieval.
 
 **Build:**
 - Graceful shutdown: on SIGINT/SIGTERM stop claiming, finish or release in-flight work, exit
