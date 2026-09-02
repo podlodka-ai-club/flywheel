@@ -28,13 +28,13 @@ function resultText(result: { content: { type: string; text?: string }[] }): str
   return result.content.filter((b) => b.type === "text").map((b) => b.text ?? "").join("\n");
 }
 
-Deno.test("search_knowledge_base returns relevant fixture articles", async () => {
+Deno.test("search_knowledge_base returns relevant Acme wiki articles", async () => {
   const context = makeContext("google");
   const result = await tool(context, "search_knowledge_base")
-    .execute("tc1", { query: "export data to csv" }, undefined, undefined);
+    .execute("tc1", { query: "content not updating on TV after publish" }, undefined, undefined);
   const text = resultText(result);
-  assertStringIncludes(text, "Exporting data to CSV");
-  assertStringIncludes(text, "kb-101");
+  assertStringIncludes(text, "T-TV-09 — Content does not update on the TV");
+  assertStringIncludes(text, "t-tv-09");
   // deno-lint-ignore no-explicit-any
   assert((result.details as any).resultCount >= 1);
 });
@@ -61,8 +61,8 @@ Deno.test("customer-scoped tools are bound to the verified identity and take no 
   const setup = await tool(context, "lookup_customer_setup")
     .execute("tc2", {}, undefined, undefined);
   const setupText = resultText(setup);
-  assertStringIncludes(setupText, "2.9.4");
-  assertStringIncludes(setupText, "PostgreSQL");
+  assertStringIncludes(setupText, "Acme TV 1.13");
+  assertStringIncludes(setupText, "Ubuntu");
 });
 
 Deno.test("customer-scoped tools fail without a verified identity or CRM record", async () => {

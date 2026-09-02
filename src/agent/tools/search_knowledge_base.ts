@@ -17,7 +17,9 @@ export function buildSearchKnowledgeBase(context: ToolRunContext): AgentTool {
       "Search the product documentation base (help articles, how-tos, policies, upgrade guides). " +
       "Use for any question about product capabilities, configuration, limits, or procedures.",
     parameters: Type.Object({
-      query: Type.String({ description: "Search terms, e.g. 'csv export' or 'api rate limit'" }),
+      query: Type.String({
+        description: "Search terms, e.g. 'content not updating on TV' or 'guest Wi-Fi login'",
+      }),
       limit: Type.Optional(
         Type.Number({ description: "Max articles to return (default 3)", minimum: 1, maximum: 5 }),
       ),

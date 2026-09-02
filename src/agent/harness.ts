@@ -147,7 +147,7 @@ export function nextSupportedThinkingLevel(
 /** Per-provider default models (overridable via LLM_MODEL). */
 export const DEFAULT_LLM_MODELS: Record<string, string> = {
   openrouter: "openai/gpt-4o-mini",
-  google: "gemini-2.5-flash",
+  google: "gemini-3.6-flash",
 };
 
 /** Conventional API-key env var per provider (pi-ai's own conventions). */

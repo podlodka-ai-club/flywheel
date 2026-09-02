@@ -214,7 +214,7 @@ adapter, like the dev harness.
 Engine seams the runner needs (each a small, additive change):
 
 1. **Connectors take their data as input** — `createMockConnectors({ customers, deployments, kb })` instead of the hardwired `fixtures/` path.
-2. **Persona/domain in the prompt** — `buildSystemPrompt` gets the persona text from the world/config instead of the hardcoded DataBridge blurb.
+2. **Persona/domain in the prompt** — `buildSystemPrompt` gets the persona text from the world/config instead of the hardcoded Acme Hotels support blurb.
 3. **Two more platform-inserted row types** alongside `human_resolution` (spec §3.2 extension): `internal_note` (`role=system`, `metadata.type`, `metadata.author`) and `human_reply` (`role=assistant`, `metadata.author`, `in_reply_to=NULL`). Hydrator and summarizer render/distill them; the dev UI gets the matching buttons.
 4. **Memory engine adapter** — `src/memory/engine.ts`: `hydrate(customer)`, `tools()`, `consolidate(thread, now)`, `recall(customer, query)`, `proposals()`. The built-in store + summarizer become the first implementation; mem0 & co. implement the same interface.
 5. **Injectable clock** through worker/harness/summarizer (the summarizer already takes `now`).

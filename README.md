@@ -1,11 +1,11 @@
 # Flywheel — AI Customer Support Agent
 
-An asynchronous, decoupled AI support agent for B2B products. **SQLite (WAL) is the message bus**: an external ticketing platform (Zendesk/Intercom/email router/custom CRM) inserts customer messages into a single `messages` table; a Deno engine claims them atomically, runs an LLM agent ([pi.dev](https://github.com/earendil-works/pi) — `pi-agent-core` + `pi-ai`), and commits replies back to the same table for the platform to deliver. The agent carries **per-customer memory with hard isolation**: durable facts, per-ticket episode summaries, and playbooks distilled from human resolutions — so escalations teach it, and escalation rates fall over time.
+An asynchronous, decoupled AI support agent for Acme Hotels Inc.'s hospitality guest-technology products. **SQLite (WAL) is the message bus**: an external ticketing platform (Zendesk/Intercom/email router/custom CRM) inserts customer messages into a single `messages` table; a Deno engine claims them atomically, runs an LLM agent ([pi.dev](https://github.com/earendil-works/pi) — `pi-agent-core` + `pi-ai`), and commits replies back to the same table for the platform to deliver. The agent carries **per-customer memory with hard isolation**: durable facts, per-ticket episode summaries, and playbooks distilled from human resolutions — so escalations teach it, and escalation rates fall over time.
 
 - **[specification.md](specification.md)** — full architecture: schema, queue mechanics, integration contract, escalation/failure semantics.
 - **[milestones.md](milestones.md)** — delivery plan; each milestone ends with hand-verifiable steps. (M1–M5 and M7 complete: queue, recovery, coalescing, logging, real agent, tools & escalation, per-customer memory & self-learning. Remaining, in execution order: M6 hardening, M8 shared knowledge.)
 
-The agent's tools (documentation search, CRM lookup, customer deployment state, escalation) call external systems through the **connector seam** in `src/connectors/` — currently fixture-backed mocks that simulate outbound requests; production swaps in real wiki/CRM/ticketing/telemetry clients behind the same interfaces (escalation makes an outbound `TicketingConnector.escalateTicket` state-change call and records the platform's reference on the reply's metadata). Customer-scoped tools take no id argument: they are hard-bound to the ticket's verified `customer_id`; the memory tools can only write customer-stated facts, never resolution history.
+The agent's tools (documentation search, CRM lookup, customer deployment state, escalation) call external systems through the **connector seam** in `src/connectors/` — currently local mocks backed by the Acme wiki export plus CRM/deployment fixtures, with simulated outbound requests; production swaps in real wiki/CRM/ticketing/telemetry clients behind the same interfaces (escalation makes an outbound `TicketingConnector.escalateTicket` state-change call and records the platform's reference on the reply's metadata). Customer-scoped tools take no id argument: they are hard-bound to the ticket's verified `customer_id`; the memory tools can only write customer-stated facts, never resolution history.
 
 ## Prerequisites
 
@@ -58,7 +58,7 @@ All optional unless noted. The engine (`deno task start`) reads `.env` automatic
 |---|---|---|
 | `AGENT_MODE` | `llm` | `llm` = real agent; `echo` = deterministic `ECHO: <text>` replies, no key needed. |
 | `LLM_PROVIDER` | `openrouter` | `openrouter` or `google` out of the box (any pi-ai provider id works with its conventional key env). |
-| `LLM_MODEL` | *(provider default)* | `openai/gpt-4o-mini` on OpenRouter; `gemini-2.5-flash` on Google. Any model id from the provider's catalog. |
+| `LLM_MODEL` | *(provider default)* | `openai/gpt-4o-mini` on OpenRouter; `gemini-3.6-flash` on Google. Any model id from the provider's catalog. |
 | `LLM_THINKING` | `off` | Requested reasoning level (`off`\|`minimal`\|`low`\|`medium`\|`high`\|`xhigh`\|`max`). Auto-clamped per model from catalog metadata (`thinking_level_clamped` log), **and** self-corrects at runtime: if the live endpoint still rejects with "reasoning is mandatory", the engine bumps one level, retries, and memoizes (`thinking_level_bumped` log). Non-reasoning models force `off`. |
 | `OPENROUTER_API_KEY` | — | **Required** when `LLM_PROVIDER=openrouter` and `AGENT_MODE=llm`. |
 | `GEMINI_API_KEY` | — | **Required** when `LLM_PROVIDER=google` and `AGENT_MODE=llm`. |
@@ -219,7 +219,7 @@ Useful during development:
 
 Twenty-two GitHub-wiki-style pages: how the support team works (statuses, escalation triggers `E-`, intake gates `Q-`), one page per product (Acme TV, HSIA guest Wi-Fi, PMS integration, ordering, admin panel, …), and reference pages (confusable symptoms `X-`, unsupported requests `U-`, known issues `K-`, a RU/EN phrasebook). Entries are self-contained and addressable by identifier, so a retrieved fragment carries its own context.
 
-**The knowledge-base export.** The KB connector consumes a flat JSON array of `{id, title, tags, body}` articles and ranks them with a naive term-frequency match (title ×3, tags ×2, body ×1), so whole pages retrieve badly — one page matches every query. `wiki/build_kb.py` therefore chunks the pages into one entry per `###` block (576 entries, median body ≈ 700 characters) in the same shape as `fixtures/kb_articles.json`, each with an `evidence` list of the tickets it came from:
+**The knowledge-base export.** The KB connector consumes a flat JSON array of `{id, title, tags, body}` articles and ranks them with a naive term-frequency match (title ×3, tags ×2, body ×1), so whole pages retrieve badly — one page matches every query. `wiki/build_kb.py` therefore chunks the pages into that article shape (576 entries, median body ≈ 700 characters), adding an `evidence` list of the tickets each entry came from:
 
 ```bash
 python3 wiki/build_kb.py            # writes wiki/kb_entries.json
@@ -228,13 +228,14 @@ python3 wiki/build_kb.py --check    # also validates wiki links and identifier u
 
 Regenerate after editing any page; `python3 wiki/build_kb.py --coverage` also rewrites `wiki/coverage.md`, which maps every ticket to the pages that reference it. `wiki/hide_evidence.py` converts visible `[FW-nnn](…)` citations into the hidden comments — run it after adding a citation in link form.
 
-**Wiring it up.** Today the mock connector reads `fixtures/kb_articles.json` (the DataBridge fixture world, which `tests/tools_test.ts` depends on) from a hard-coded path, and the engine's `--allow-read` is pinned to `./data`, `./schema.sql` and `./fixtures`. To run the agent against the wiki, either copy `wiki/kb_entries.json` into `fixtures/` and point the connector at it, or — the planned route — give `createMockConnectors` its data as input, the first runner seam listed in `evals/README.md`; extend `--allow-read` if the file stays under `wiki/`. `wiki/publish.sh` pushes the pages to the repository's GitHub wiki and is never run automatically.
+**Wiring it up.** The mock knowledge-base connector reads `wiki/kb_entries.json` directly; the engine and dev-harness read permissions include that generated export, and the dev harness watches it for changes. CRM and deployment mocks continue to read `fixtures/`. Regenerate the export after editing wiki pages. `wiki/publish.sh` pushes the pages to the repository's GitHub wiki and is never run automatically.
 
 ## Layout
 
 ```
 schema.sql            DDL: messages (queue + history + outbound buffer) and memories, with indexes
-fixtures/             mock-connector data: KB articles, CRM customers, deployments
+fixtures/             mock-connector data: CRM customers and deployments
+wiki/kb_entries.json  generated Acme knowledge-base data used by the mock connector
 src/
   config.ts           env-driven configuration (all variables above)
   main.ts             engine entrypoint: workers + reaper + summarizer + graceful shutdown

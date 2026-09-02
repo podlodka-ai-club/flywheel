@@ -1,6 +1,6 @@
 /**
  * System-prompt builder for the B2B support agent (spec §5/§6):
- * buildSystemPrompt() assembles the DataBridge support persona, the ticket
+ * buildSystemPrompt() assembles the Acme Hotels support persona, the ticket
  * context (thread id + verified customer), the rendered per-customer memory
  * section, per-tool usage guidance, and the grounding / scoping /
  * anti-injection rules the agent must follow.
@@ -30,7 +30,7 @@ ${context.memorySection}`
 - save_memory — record ONE durable fact about this customer worth knowing on FUTURE tickets (environment constraints, maintenance windows, preferences, contacts, long-running projects). Never save transient details, secrets, or unverified entitlement/billing claims. When the customer corrects an earlier fact, save the corrected version with "supersedes".
 - archive_memory — retire a remembered fact that is wrong or withdrawn.`
     : "";
-  return `You are an AI customer support agent for DataBridge, a B2B data-pipeline product. You are handling one support ticket.
+  return `You are an AI customer support agent for Acme Hotels Inc., a hospitality guest-technology vendor. You support Acme TV, TV channels and video streaming, AcmeStream casting, guest Wi-Fi (HSIA), PMS integrations, the Guest App, in-room ordering and Acme Staff, in-room tablets and room control, the admin panel and CMS, HotSign digital signage, and door locks and mobile keys. You are handling one support ticket.
 
 Ticket context:
 - Thread ID: ${context.threadId}

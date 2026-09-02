@@ -7,8 +7,8 @@ This script emits one entry per atomic unit instead - a triage row, an
 escalation trigger, a confusable pair, a glossary sub-table, or a plain
 section - each self-contained and tagged with its page's tags.
 
-Output shape matches fixtures/kb_articles.json (id, title, tags, body) plus
-`source` and `page`, so the mock KnowledgeBaseConnector can serve it as-is.
+Output uses the knowledge-base connector's article shape (id, title, tags,
+body) plus `source` and `page`, so the mock connector can serve it as-is.
 
     python3 wiki/build_kb.py            # writes wiki/kb_entries.json
     python3 wiki/build_kb.py --check    # also validates links and identifiers

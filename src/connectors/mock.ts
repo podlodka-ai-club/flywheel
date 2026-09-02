@@ -1,7 +1,7 @@
 /**
  * Mock connectors: behave like clients of external systems — async, with
  * simulated request latency and a `connector_request` log line per call —
- * but answer from local JSON fixtures. Replaced by real API clients later.
+ * but answer from local JSON sources. Replaced by real API clients later.
  */
 import { logger } from "../logger/index.ts";
 import type {
@@ -20,6 +20,7 @@ import type {
 } from "./types.ts";
 
 const FIXTURES_URL = (name: string) => new URL(`../../fixtures/${name}`, import.meta.url);
+const KNOWLEDGE_BASE_URL = new URL("../../wiki/kb_entries.json", import.meta.url);
 const MOCK_LATENCY_MS = 80;
 
 async function simulateRequest<T>(
@@ -41,11 +42,11 @@ async function simulateRequest<T>(
   return result;
 }
 
-async function readFixture<T>(name: string, cache: Map<string, unknown>): Promise<T> {
-  if (!cache.has(name)) {
-    cache.set(name, JSON.parse(await Deno.readTextFile(FIXTURES_URL(name))));
+async function readJson<T>(key: string, url: URL, cache: Map<string, unknown>): Promise<T> {
+  if (!cache.has(key)) {
+    cache.set(key, JSON.parse(await Deno.readTextFile(url)));
   }
-  return cache.get(name) as T;
+  return cache.get(key) as T;
 }
 
 const fixtureCache = new Map<string, unknown>();
@@ -71,7 +72,7 @@ function scoreArticle(article: KbArticle, queryTokens: string[]): number {
 class MockKnowledgeBase implements KnowledgeBaseConnector {
   search(query: string, limit: number): Promise<KbSearchResult[]> {
     return simulateRequest("knowledge_base", "search", { query, limit }, async () => {
-      const articles = await readFixture<KbArticle[]>("kb_articles.json", fixtureCache);
+      const articles = await readJson<KbArticle[]>("knowledge_base", KNOWLEDGE_BASE_URL, fixtureCache);
       const queryTokens = tokenize(query);
       return articles
         .map((article) => ({ article, score: scoreArticle(article, queryTokens) }))
@@ -85,14 +86,22 @@ class MockKnowledgeBase implements KnowledgeBaseConnector {
 class MockCrm implements CrmConnector {
   getCustomer(customerId: string): Promise<CustomerProfile | null> {
     return simulateRequest("crm", "getCustomer", { customerId }, async () => {
-      const customers = await readFixture<CustomerProfile[]>("customers.json", fixtureCache);
+      const customers = await readJson<CustomerProfile[]>(
+        "customers",
+        FIXTURES_URL("customers.json"),
+        fixtureCache,
+      );
       return customers.find((c) => c.customerId === customerId) ?? null;
     });
   }
 
   listCustomers(): Promise<CustomerSummary[]> {
     return simulateRequest("crm", "listCustomers", {}, async () => {
-      const customers = await readFixture<CustomerProfile[]>("customers.json", fixtureCache);
+      const customers = await readJson<CustomerProfile[]>(
+        "customers",
+        FIXTURES_URL("customers.json"),
+        fixtureCache,
+      );
       return customers.map((c) => ({
         customerId: c.customerId,
         company: c.company,
@@ -105,7 +114,11 @@ class MockCrm implements CrmConnector {
 class MockDeployments implements DeploymentConnector {
   getSetup(customerId: string): Promise<CustomerSetup | null> {
     return simulateRequest("deployments", "getSetup", { customerId }, async () => {
-      const setups = await readFixture<CustomerSetup[]>("deployments.json", fixtureCache);
+      const setups = await readJson<CustomerSetup[]>(
+        "deployments",
+        FIXTURES_URL("deployments.json"),
+        fixtureCache,
+      );
       return setups.find((s) => s.customerId === customerId) ?? null;
     });
   }
