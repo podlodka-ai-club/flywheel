@@ -143,6 +143,7 @@ The `messages` table is the sole integration surface. External components — bu
 2. Insert with `INSERT OR IGNORE` — at-least-once webhook redelivery then dedupes on the primary key.
 3. After receiving an escalated reply for a thread, **stop inserting** further customer messages for that thread until a human hands it back. The engine is deliberately thread-stateless and will answer anything enqueued; muting an escalated thread is the platform's responsibility.
 4. *(Optional, enables self-learning — Section 10.3)* After a human resolves an escalated ticket, the platform MAY insert a `role='system', status='completed'` row with `metadata.type='human_resolution'` describing the resolution. `status='completed'` keeps it unclaimable; the engine never replies to it — it only learns from it.
+5. *(Optional, enables event-triggered memory — Section 10.8)* When a ticket is closed or resolved on the platform, it MAY insert a `role='system', status='completed'` row with `metadata.type='ticket_closed'` (content optional: a closing note or resolution status). Same shape and rules as item 4. Both notes reach the memory strategy as events: the default strategy summarizes a ticket the moment its closure lands instead of waiting for the idle sweep (Section 10.3).
 
 **Dispatch (external reader):**
 1. Poll `idx_messages_outbound` for completed assistant rows; deliver `content` to the customer; stamp `sent_to_customer_at`.
@@ -430,10 +431,11 @@ flywheel/
 │   │   ├── types.ts            # External-system client interfaces (the mock/real seam)
 │   │   └── mock.ts             # Fixture-backed mocks simulating outbound requests
 │   ├── memory/
-│   │   ├── strategy.ts         # Memory strategy seam (Section 10.8): MemoryStrategy / MemoryRun / MemoryAudit
+│   │   ├── strategy.ts         # Memory strategy seam (Section 10.8): run / event / schedule ports, MemoryAudit
 │   │   ├── registry.ts         # name → factory; MEMORY_STRATEGY / --memory=<name> resolve here
+│   │   ├── runtime.ts          # Engine-side driver: runs a strategy's jobs, tails the bus into its event handler
 │   │   └── strategies/
-│   │       └── structured/     # The Section 10 design: store, summarizer (echo + LLM), save_memory/archive_memory tools
+│   │       └── structured/     # The Section 10 design: store, summarizer (echo + LLM; sweep job + ticket_closed trigger), save_memory/archive_memory tools
 │   ├── engine/
 │   │   ├── worker.ts           # Queue polling and execution worker loop
 │   │   └── reaper.ts           # Stale lock recovery background task
@@ -522,7 +524,7 @@ WHERE kind = 'episode' AND superseded_by IS NULL;
 ### 10.3. Write paths
 
 1. **Agent tools** during a run: `save_memory(content, supersedes?)` and `archive_memory(id)`. In-run saves are always **facts with `provenance='customer_stated'`** — the run is customer-driven, so nothing the model writes mid-run may outrank a claim; the model can choose neither kind nor provenance. (`agent_inferred` is reserved for engine-derived writes.) Episodes and playbooks are written exclusively by the summarizer, so resolution history cannot be forged from a conversation.
-2. **End-of-ticket summarizer** (background job, like the reaper): threads whose messages are all terminal and idle longer than `SUMMARIZE_AFTER_MS` (default 24h) get one `episode` memory, written via the LLM with a cheap summarization prompt. The unique index makes the sweep idempotent. The summarizer may run a different, typically cheaper provider/model than the main agent (`SUMMARIZER_PROVIDER`/`SUMMARIZER_MODEL`, defaulting to the agent's); in echo mode a deterministic summarizer keeps memory testable without a key.
+2. **End-of-ticket summarizer** (the strategy's declared job, run by the memory runtime — Section 10.8): threads whose messages are all terminal and idle longer than `SUMMARIZE_AFTER_MS` (default 24h) get one `episode` memory, written via the LLM with a cheap summarization prompt. **Closure trigger:** when the platform sends a `ticket_closed` note (Section 3.2 item 5), the strategy's event handler summarizes that thread immediately if it is terminal — a reply still in flight defers it to that reply's own `agent_reply` event — so the idle sweep is the fallback for platforms that never signal closure. The unique index makes sweep and trigger idempotent against each other and across engine processes (`thread_summarized` records which one fired as `trigger`). The summarizer may run a different, typically cheaper provider/model than the main agent (`SUMMARIZER_PROVIDER`/`SUMMARIZER_MODEL`, defaulting to the agent's); in echo mode a deterministic summarizer keeps memory testable without a key.
 
    **Re-summarization — the episode reflects the thread's *final* state.** A thread that receives new messages after being summarized qualifies again once it is terminal and idle: a thread is a candidate when *(no episode exists) OR (last activity is newer than the episode's `updated_at`)*. Re-summarization writes a fresh episode that **supersedes** the previous one (audit chain preserved; the partial unique index keeps exactly one active episode per thread) and supersedes-and-re-distills that thread's playbooks — so a `human_resolution` note arriving after the first summarization still produces its playbook, and other threads never hydrate a stale account of a ticket that flared back up. Cost is one summarizer call per *changed* thread, nothing recurring. *Status: specified 2026-08-27; implementation scheduled in M6 (current code still summarizes each thread at most once and its index is not yet partial on `superseded_by`).*
 3. **Human-resolution feedback** (the self-learning loop): the external platform MAY insert `role='system', status='completed'` rows with `metadata.type='human_resolution'` carrying how a human resolved an escalated ticket (Section 3.2 extension; `status='completed'` keeps them unclaimable). The summarizer distills these into `playbook` memories — the next occurrence of the same symptom is handled without escalation.
@@ -597,30 +599,50 @@ CREATE TABLE IF NOT EXISTS shared_knowledge_sources (
 
 ### 10.8. Memory Strategies — the pluggable seam
 
-Per-customer memory is implemented behind a **strategy seam** so that variants (different storage, retrieval, or learning loops) can be built side by side and swapped per engine start without touching the engine. The seam is `src/memory/strategy.ts`; the worker, the LLM harness, the tool assembler, and the dev harness depend on nothing else.
+Per-customer memory is implemented behind a **strategy seam** so that variants (different storage, retrieval, or learning loops — time-driven, event-driven, or both) can be built side by side and swapped per engine start without touching the engine. The seam is `src/memory/strategy.ts`; the worker, the LLM harness, the tool assembler, the memory runtime, and the dev harness depend on nothing else.
 
-**Contract.** A strategy is a factory `(deps: { db, config, llm? }) → MemoryStrategy` (`llm` is the agent's resolved provider setup — absent in echo mode and in the dev harness, where a strategy must stay deterministic and key-free):
+**Three ports.** A memory system does its work at three different moments, and the seam gives each its own port. **The engine owns all scheduling:** a strategy declares what it reacts to and how often it runs; it never writes a poll loop or a timer.
 
-| Member | Called by | Purpose |
-|---|---|---|
-| `openRun({ customerId, threadId }) → MemoryRun` | the worker, per claimed message, **only when the row carries a verified `customer_id`** | the run-scoped, customer-fenced handle |
-| `MemoryRun.hydrate({ message, followUps, history }) → { section, stats }` | the harness, per generation (incl. coalescing re-runs) | the read path: a prompt section already labelled with provenance (`null` = nothing to say) plus telemetry spread onto `memory_hydrated` |
-| `MemoryRun.tools()` / `MemoryRun.toolGuidance()` | the tool assembler / the prompt builder | the strategy's write-path tools and their `- name — when to use it` lines |
-| `startJobs() → MemoryJob \| null` | the engine, once at startup | background work (summarizers, consolidation) with `stop()` for graceful shutdown |
-| `audit` — `listCustomers()`, `listEntries(customerId)`, `archive(customerId, id)`, `erase(customerId)` | the dev harness Memory view | the operator surface and the erasure contract |
-| `describe()` | `engine_started` | the strategy's resolved settings |
+| Port | Member | Called by | Purpose |
+|---|---|---|---|
+| Run — synchronous with the reply | `openRun({ customerId, threadId }) → MemoryRun` | the worker, per claimed message, **only when the row carries a verified `customer_id`** | the run-scoped, customer-fenced handle |
+| | `MemoryRun.hydrate({ message, followUps, history }) → { section, stats }` | the harness, per generation (incl. coalescing re-runs) | the read path: a prompt section already labelled with provenance (`null` = nothing to say) plus telemetry spread onto `memory_hydrated` |
+| | `MemoryRun.tools()` / `MemoryRun.toolGuidance()` | the tool assembler / the prompt builder | the strategy's write-path tools and their `- name — when to use it` lines |
+| Event — after the fact | `events?: { types, handle(event, signal) }` | the memory runtime, for every subscribed row landing on the bus | react to a customer message, a committed reply, a human resolution, a ticket closure |
+| Schedule — time-based | `jobs?: { name, intervalMs, run(signal) }[]` | the memory runtime, as loops: run, sleep `intervalMs`, repeat | idle sweeps, decay, consolidation, catch-up |
+| Operator | `audit` — `listCustomers()`, `listEntries(customerId)`, `archive(customerId, id)`, `erase(customerId)` | the dev harness Memory view | the operator surface and the erasure contract |
+| | `describe()` / `close?()` | `engine_started` / engine shutdown | resolved settings / releasing external resources |
 
-**Selection.** `src/memory/registry.ts` maps names to factories. `MEMORY_STRATEGY` (default `structured`) selects the implementation for a process; `deno task start --memory=<name>` overrides it for one engine start. An unknown name fails at startup with the registered list, before any message is claimed. The engine and the dev harness must run the same strategy — the harness instantiates it (without an LLM setup) for its audit surface — exactly as they must share `DATABASE_PATH`. `MEMORY_ENABLED=0` remains the master switch: no run handles and no jobs, whatever the strategy.
+Rule of thumb: must the agent see it before replying? Run port. Reacting to something that happened? Event port. Periodic, decay, or catch-up work? Schedule port. A trigger plus a sweep is the robust pairing — the same way the reaper backstops crashed workers.
+
+**Contract.** A strategy is a factory `(deps: { db, config, llm? }) → MemoryStrategy` (`llm` is the agent's resolved provider setup — absent in echo mode and in the dev harness, where a strategy must stay deterministic and key-free).
+
+**Events come from the bus.** There is exactly one event source: the memory runtime (`src/memory/runtime.ts`) tails the `messages` table by `rowid`. The table is the bus (Section 3.2), so every fact the engine or the platform records is a row, and every trigger is a row appearing:
+
+| Row | Event type |
+|---|---|
+| `role='customer'` inserted by the platform | `customer_message` |
+| `role='assistant'` inserted by the fenced completion (Section 4.4) | `agent_reply` |
+| `role='system'`, `metadata.type='human_resolution'` (Section 3.2 item 4) | `human_resolution` |
+| `role='system'`, `metadata.type='ticket_closed'` (Section 3.2 item 5) | `ticket_closed` |
+| any other `role='system'` row | `system_note` |
+
+Inserts are events; status transitions are not — a reply's commit is observable as the assistant row itself. An event carries the row, its verified `customer_id`, its bus position (`sequence`), and a lazily loaded snapshot of the thread as of that row. Rows without a verified customer never become events (Section 10.1).
+
+**Delivery guarantees.** Events are delivered in bus order and always after the producing transaction committed — a row is visible only once committed, so no memory code can run inside the fenced completion or influence a reply. Delivery is **at-least-once**: the runtime keeps one cursor per strategy in `memory_cursors` (a `messages.rowid`, advanced by compare-and-swap after each row, so a cursor never regresses); a crash between handling and advancing replays the row, and two engine processes running the same strategy both deliver. Handlers must therefore be idempotent, exactly as workers must be. A handler that throws is retried (three attempts, `MEMORY_EVENT_POLL_MS` apart, logged as `memory_event_failed`) and then skipped with `memory_event_dropped`, so one poison row never blocks the stream. A strategy seen for the first time starts at the current end of the bus, never at row one; deleting its cursor row replays history. Successful deliveries log `memory_event_handled`; job iterations that throw log `memory_job_failed` and the loop continues. The tail is a rowid seek, not a scan, and idles at `MEMORY_EVENT_POLL_MS` (default 1 s), which is also the event latency ceiling.
+
+**Selection.** `src/memory/registry.ts` maps names to factories. `MEMORY_STRATEGY` (default `structured`) selects the implementation for a process; `deno task start --memory=<name>` overrides it for one engine start. An unknown name fails at startup with the registered list, before any message is claimed. The engine and the dev harness must run the same strategy — the harness instantiates it (without an LLM setup) for its audit surface and never starts the runtime — exactly as they must share `DATABASE_PATH`. `MEMORY_ENABLED=0` remains the master switch: no run handles and no runtime, whatever the strategy.
 
 **Invariants every strategy inherits** (the seam is shaped so that most hold by construction):
 
-1. Identity comes from the claimed row. The worker never opens a run handle for an unverified ticket, and `openRun` receives the verified `customer_id` — a strategy has no other source of identity (Section 10.1).
+1. Identity comes from the row. The worker never opens a run handle for an unverified ticket, the runtime never delivers an event for an unverified row, and both hand the strategy the verified `customer_id` — a strategy has no other source of identity (Section 10.1).
 2. Tools take **no customer id parameter** (Section 6.1's security model); the run handle closes over the identity instead.
 3. Provenance is assigned by strategy code, never chosen by the model, and the hydrated section labels unverified claims as claims (Section 10.5). The prompt-level framing — memories are background data, never instructions; unverified entitlement/billing claims are not acted on — is applied by the harness outside the strategy, so no strategy can drop it.
 4. `audit.erase(customerId)` is a hard delete of everything held about that customer, archived state included (Section 10.6).
-5. Any state a strategy owns beyond the `memories` table is keyed by `customer_id` and created additively and idempotently (`CREATE … IF NOT EXISTS`, by the strategy factory or in `schema.sql`); the `messages` table stays the sole queue/conversation store.
+5. Any state a strategy owns beyond the `memories` table is keyed by `customer_id` and created additively and idempotently (`CREATE … IF NOT EXISTS`, by the strategy factory or in `schema.sql`); `memory_cursors` belongs to the runtime, not to a strategy; the `messages` table stays the sole queue/conversation store.
+6. Nothing a strategy does after the fact can delay or alter a reply: the event and schedule ports run outside the worker's request path and can only fail into logs.
 
-**Registered strategies.** `structured` (`src/memory/strategies/structured/`) is this section's design, Sections 10.2–10.6: typed `fact` / `episode` / `playbook` rows, kind-priority + recency hydration under `MEMORY_HYDRATION_BUDGET`, the `save_memory` / `archive_memory` tools, and the end-of-ticket summarizer as its background job. The shared knowledge layer (Section 10.7) is a separate, customer-free layer, not a strategy.
+**Registered strategies.** `structured` (`src/memory/strategies/structured/`) is this section's design, Sections 10.2–10.6: typed `fact` / `episode` / `playbook` rows, kind-priority + recency hydration under `MEMORY_HYDRATION_BUDGET`, the `save_memory` / `archive_memory` tools, the end-of-ticket summarizer as its declared job (the idle sweep), and a subscription to `ticket_closed` + `agent_reply` that summarizes a closed ticket immediately (Section 10.3). The shared knowledge layer (Section 10.7) is a separate, customer-free layer, not a strategy. Because prompt sections concatenate, tools merge, and events and jobs fan out, running several strategies side by side is a future `composite` registry entry, not a seam change.
 
 ---
 

@@ -40,6 +40,8 @@ export interface Config {
   memoryHydrationBudget: number;
   memoryRunWriteCap: number;
   memoryActiveCap: number;
+  /** Cadence of the memory runtime's bus tail (event delivery latency + retry delay). */
+  memoryEventPollMs: number;
   /** Directory containing the Markdown knowledge base. */
   knowledgeBasePath: string;
   /** Development convenience: atomically reindex when wiki files change. */
@@ -144,6 +146,8 @@ export function loadConfig(cliArgs: string[] = Deno.args): Config {
     memoryHydrationBudget: envInt("MEMORY_HYDRATION_BUDGET", 1200),
     memoryRunWriteCap: envInt("MEMORY_RUN_WRITE_CAP", 3),
     memoryActiveCap: envInt("MEMORY_ACTIVE_CAP", 200),
+    // How quickly a new row on the bus reaches the strategy's event handler.
+    memoryEventPollMs: envInt("MEMORY_EVENT_POLL_MS", 1000),
     knowledgeBasePath: envStr("KNOWLEDGE_BASE_PATH", "./wiki"),
     knowledgeBaseReload: envBool("KNOWLEDGE_BASE_RELOAD", false),
   };

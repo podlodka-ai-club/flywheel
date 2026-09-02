@@ -4,13 +4,16 @@
  * table with system-assigned provenance and supersede/archive chains
  * (store.ts), hydration by kind priority + recency under a token budget,
  * the `save_memory` / `archive_memory` tools (tools/), and the end-of-ticket
- * summarizer background job (summarizer.ts; LLM-backed via summarize_llm.ts,
- * deterministic echo without an LLM setup).
+ * summarizer (summarizer.ts; LLM-backed via summarize_llm.ts, deterministic
+ * echo without an LLM setup) on two of the seam's ports: the idle sweep as a
+ * declared job, and immediate summarization on the platform's ticket_closed
+ * note through the event handler.
  */
 import type { DatabaseSync } from "node:sqlite";
 import { type LlmSetup, resolveLlmSetup } from "../../../agent/harness.ts";
 import type { Config } from "../../../config.ts";
-import type { MemoryJob, MemoryRun, MemoryRunInput, MemoryStrategy } from "../../strategy.ts";
+import type { MessageRecord } from "../../../db/messages.ts";
+import type { MemoryEvent, MemoryRun, MemoryRunInput, MemoryStrategy } from "../../strategy.ts";
 import {
   archiveMemory,
   createMemoryAccess,
@@ -20,7 +23,13 @@ import {
   renderMemoriesForPrompt,
 } from "./store.ts";
 import { createLlmThreadSummarizer } from "./summarize_llm.ts";
-import { createEchoThreadSummarizer, startSummarizer } from "./summarizer.ts";
+import {
+  createEchoThreadSummarizer,
+  summarizeOnce,
+  summarizerIntervalMs,
+  summarizeThreadNow,
+  type ThreadSummarizeFn,
+} from "./summarizer.ts";
 import { buildArchiveMemory } from "./tools/archive_memory.ts";
 import { buildSaveMemory } from "./tools/save_memory.ts";
 
@@ -69,9 +78,22 @@ export function resolveSummarizerSetup(
   });
 }
 
+/** Platform note that the ticket was closed (spec §3.2 item 5). */
+function isTicketClosedNote(message: MessageRecord): boolean {
+  return message.role === "system" &&
+    (message.metadata as { type?: unknown } | null)?.type === "ticket_closed";
+}
+
 export function createStructuredMemoryStrategy(deps: StructuredMemoryDeps): MemoryStrategy {
   const { db, config } = deps;
   const summarizerSetup = resolveSummarizerSetup(config, deps.llm);
+  // Built on first use: the dev harness instantiates the strategy for its
+  // audit surface and never summarizes.
+  let summarizer: ThreadSummarizeFn | undefined;
+  const summarize = (): ThreadSummarizeFn =>
+    summarizer ??= summarizerSetup !== undefined
+      ? createLlmThreadSummarizer(summarizerSetup)
+      : createEchoThreadSummarizer();
 
   return {
     name: STRUCTURED_MEMORY_STRATEGY,
@@ -105,14 +127,36 @@ export function createStructuredMemoryStrategy(deps: StructuredMemoryDeps): Memo
       };
     },
 
-    startJobs(): MemoryJob {
-      return startSummarizer(db, {
-        summarizeAfterMs: config.summarizeAfterMs,
-        activeCap: config.memoryActiveCap,
-        summarize: summarizerSetup !== undefined
-          ? createLlmThreadSummarizer(summarizerSetup)
-          : createEchoThreadSummarizer(),
-      });
+    // Schedule port: the idle sweep — terminal threads quiet for
+    // SUMMARIZE_AFTER_MS get their episode (+ playbook). Also the fallback
+    // for platforms that never send ticket_closed.
+    jobs: [{
+      name: "summarizer",
+      intervalMs: summarizerIntervalMs(config.summarizeAfterMs),
+      run: async (signal) => {
+        await summarizeOnce(db, summarize(), {
+          now: Date.now(),
+          summarizeAfterMs: config.summarizeAfterMs,
+          activeCap: config.memoryActiveCap,
+        }, signal);
+      },
+    }],
+
+    // Event port: summarize as soon as the platform closes the ticket. If a
+    // reply is still in flight at that moment the thread is not terminal
+    // yet, so the reply's own agent_reply event re-checks threads that carry
+    // a ticket_closed note. The unique episode index keeps both triggers and
+    // the sweep idempotent.
+    events: {
+      types: ["ticket_closed", "agent_reply"],
+      handle: async (event: MemoryEvent, signal) => {
+        if (event.type === "agent_reply" && !event.thread().some(isTicketClosedNote)) return;
+        await summarizeThreadNow(db, summarize(), event.threadId, {
+          now: Date.now(),
+          activeCap: config.memoryActiveCap,
+          trigger: event.type === "ticket_closed" ? "ticket_closed" : "agent_reply",
+        }, signal);
+      },
     },
 
     audit: {

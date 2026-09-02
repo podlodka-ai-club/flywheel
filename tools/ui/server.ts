@@ -25,7 +25,7 @@ import { parseEnvFile } from "./env_file.ts";
 
 configureLogging({ name: "dev-ui" });
 const db = openDb(config.databasePath);
-const connectors = createMockConnectors();
+const connectors = createConnectors();
 // The Memory view is the audit surface of whichever strategy the engine runs,
 // so MEMORY_STRATEGY must match across the two processes (like DATABASE_PATH).
 // No LLM setup here: the harness audits, archives, and erases but never
@@ -384,6 +384,7 @@ const CONFIG_VARS: { env: string; default: string; section: string; note?: strin
   { env: "MEMORY_HYDRATION_BUDGET", default: "1200", section: "Memory", note: "approx. tokens of memories in the system prompt" },
   { env: "MEMORY_RUN_WRITE_CAP", default: "3", section: "Memory", note: "max memory writes per agent run" },
   { env: "MEMORY_ACTIVE_CAP", default: "200", section: "Memory", note: "max active memories per customer" },
+  { env: "MEMORY_EVENT_POLL_MS", default: "1000", section: "Memory", note: "bus-tail cadence: how fast new rows reach the strategy's event handler" },
   { env: "DATABASE_PATH", default: "./data/support.db", section: "Queue & engine" },
   { env: "WORKER_CONCURRENCY", default: "2", section: "Queue & engine" },
   { env: "POLL_INTERVAL_MS", default: "500", section: "Queue & engine" },
@@ -557,21 +558,25 @@ async function handler(req: Request): Promise<Response> {
     }
     return json({ archived });
   }
-  const humanResolution = pathname.match(/^\/api\/threads\/([^/]+)\/human_resolution$/);
-  if (req.method === "POST" && humanResolution) {
-    const threadId = decodeURIComponent(humanResolution[1]);
+  // Platform-inserted notes (spec §3.2 items 4–5), simulated from the thread
+  // header: a human resolution or the ticket being closed. status='completed'
+  // rows are unclaimable; the memory strategy's event handler sees them.
+  const platformNote = pathname.match(/^\/api\/threads\/([^/]+)\/(human_resolution|ticket_closed)$/);
+  if (req.method === "POST" && platformNote) {
+    const threadId = decodeURIComponent(platformNote[1]);
+    const type = platformNote[2] as "human_resolution" | "ticket_closed";
     const body = await req.json().catch(() => ({}));
     const content = typeof body.content === "string" ? body.content.trim() : "";
-    if (content === "") return json({ error: "content required" }, 400);
+    if (content === "" && type === "human_resolution") return json({ error: "content required" }, 400);
     const customerId = getThreadMessages(db, threadId)
       .find((m) => m.customerId !== null)?.customerId ?? null;
     const row = insertSystemMessage(db, {
       threadId,
-      content,
+      content: content === "" ? "Ticket closed on the platform." : content,
       customerId,
-      metadata: { type: "human_resolution", channel: "dev-ui" },
+      metadata: { type, channel: "dev-ui" },
     });
-    logger.info("dev_ui_human_resolution_inserted", { threadId, messageId: row.id, customerId });
+    logger.info(`dev_ui_${type}_inserted`, { threadId, messageId: row.id, customerId });
     return json({ id: row.id });
   }
 

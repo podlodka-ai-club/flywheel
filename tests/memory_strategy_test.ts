@@ -3,10 +3,12 @@
  * strategy selection (MEMORY_STRATEGY env var, `--memory=<name>` CLI
  * override, unknown names rejected with the registered list), the
  * `structured` strategy exercised purely through the seam (run-handle
- * hydration + id-free tools, audit surface, background-job lifecycle), and
- * the engine's strategy-agnostic wiring: the worker opens a run handle only
- * for verified customers, and the LLM harness renders whatever section and
- * tools a strategy provides.
+ * hydration + id-free tools, audit surface, its declared job and event
+ * subscription, summarizing at once on the platform's ticket_closed note
+ * and deferring while a reply is in flight), and the engine's
+ * strategy-agnostic wiring: the worker opens a run handle only for verified
+ * customers, and the LLM harness renders whatever section and tools a
+ * strategy provides.
  */
 import { assert, assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
 import { createModels, fauxAssistantMessage, fauxProvider, Type } from "@earendil-works/pi-ai";
@@ -17,11 +19,17 @@ import type { AgentHarness, AgentRunInput } from "../src/agent/harness.ts";
 import { textResult } from "../src/agent/tools/context.ts";
 import { loadConfig } from "../src/config.ts";
 import { openDb } from "../src/db/client.ts";
-import { getMessage, insertCustomerMessage } from "../src/db/messages.ts";
+import {
+  getMessage,
+  getThreadMessages,
+  insertCustomerMessage,
+  insertSystemMessage,
+} from "../src/db/messages.ts";
 import type { MessageRecord } from "../src/db/messages.ts";
+import { claimNextMessage, completeWithReply } from "../src/db/queue.ts";
 import { startWorkers } from "../src/engine/worker.ts";
 import { createMemoryStrategy, listMemoryStrategies } from "../src/memory/registry.ts";
-import type { MemoryRun, MemoryStrategy } from "../src/memory/strategy.ts";
+import type { MemoryEvent, MemoryEventType, MemoryRun, MemoryStrategy } from "../src/memory/strategy.ts";
 import { createStructuredMemoryStrategy } from "../src/memory/strategies/structured/index.ts";
 
 async function withTempDb(fn: (db: ReturnType<typeof openDb>) => Promise<void> | void) {
@@ -77,6 +85,32 @@ const STRUCTURED_CONFIG = {
   memoryRunWriteCap: 2,
   memoryActiveCap: 100,
 };
+
+/** Customer message → claimed → replied, all completed (reply id `r_<id>`). */
+function resolveThread(db: ReturnType<typeof openDb>, threadId: string, id: string, at: number) {
+  insertCustomerMessage(db, { id, threadId, content: "webhooks keep timing out", customerId: "google", createdAt: at });
+  const claimed = claimNextMessage(db, "w1", at + 1);
+  assert(claimed !== null && claimed.id === id, `expected to claim ${id}`);
+  completeWithReply(db, {
+    anchorId: id,
+    threadId,
+    workerId: "w1",
+    reply: { id: `r_${id}`, content: "Try raising the batch size to 100.", model: "echo", tokensIn: null, tokensOut: null, costUsd: null },
+    now: at + 2,
+  });
+}
+
+/** What the memory runtime would deliver for this row (the seam's event shape). */
+function eventFor(db: ReturnType<typeof openDb>, message: MessageRecord, type: MemoryEventType): MemoryEvent {
+  return {
+    type,
+    customerId: message.customerId ?? "",
+    threadId: message.threadId,
+    message,
+    sequence: 0,
+    thread: () => getThreadMessages(db, message.threadId),
+  };
+}
 
 Deno.test("config: MEMORY_STRATEGY selects the strategy; --memory=<name> overrides it per process", () => {
   const previous = Deno.env.get("MEMORY_STRATEGY");
@@ -154,12 +188,70 @@ Deno.test("structured strategy through the seam: hydration, id-free tools, audit
     assertEquals(strategy.audit.erase("google"), 1);
     assertEquals(strategy.audit.listEntries("google"), []);
 
-    // Background job (echo summarizer, no LLM setup) starts and stops cleanly.
-    const job = strategy.startJobs();
-    assert(job !== null);
-    await job.stop();
+    // Asynchronous ports: the idle sweep as a declared job (echo summarizer,
+    // no LLM setup) and the close-triggered summarization subscription.
+    assertEquals(strategy.jobs?.map((job) => job.name), ["summarizer"]);
+    assertEquals(strategy.jobs?.[0].intervalMs, 15_000); // SUMMARIZE_AFTER_MS / 4
+    await strategy.jobs![0].run(new AbortController().signal); // nothing eligible: a no-op sweep
+    assertEquals(strategy.events?.types, ["ticket_closed", "agent_reply"]);
     assertEquals(strategy.describe().summarizeAfterMs, 60_000);
     assertEquals(strategy.describe().summarizerProvider, null);
+  });
+});
+
+Deno.test("structured strategy: ticket_closed summarizes at once, defers while a reply is in flight, stays idempotent with the sweep", async () => {
+  await withTempDb(async (db) => {
+    const strategy = createStructuredMemoryStrategy({ db, config: STRUCTURED_CONFIG });
+    const events = strategy.events;
+    assert(events !== undefined);
+    const now = 1_000_000;
+    const episodes = () => strategy.audit.listEntries("google").filter((e) => e.kind === "episode");
+
+    // Closed while terminal: the episode is written immediately — no idle wait.
+    resolveThread(db, "tkt_closed", "m1", now);
+    const closed = insertSystemMessage(db, {
+      threadId: "tkt_closed",
+      content: "closed",
+      customerId: "google",
+      metadata: { type: "ticket_closed" },
+      createdAt: now + 10,
+    });
+    await events.handle(eventFor(db, closed, "ticket_closed"));
+    assertEquals(episodes().map((e) => e.sourceThreadId), ["tkt_closed"]);
+    assertStringIncludes(episodes()[0].content, "webhooks keep timing out");
+
+    // The sweep finds nothing new for it (unique episode per thread).
+    await strategy.jobs![0].run(new AbortController().signal);
+    assertEquals(episodes().length, 1);
+
+    // Closed while a reply is still in flight: deferred, nothing written…
+    insertCustomerMessage(db, { id: "m2", threadId: "tkt_open", content: "tv has no signal", customerId: "google", createdAt: now + 20 });
+    const claimed = claimNextMessage(db, "w1", now + 21);
+    assert(claimed !== null && claimed.id === "m2");
+    const closedEarly = insertSystemMessage(db, {
+      threadId: "tkt_open",
+      content: "closed",
+      customerId: "google",
+      metadata: { type: "ticket_closed" },
+      createdAt: now + 22,
+    });
+    await events.handle(eventFor(db, closedEarly, "ticket_closed"));
+    assertEquals(episodes().length, 1);
+    // …until the reply commits: its agent_reply event re-checks the closed thread.
+    completeWithReply(db, {
+      anchorId: "m2",
+      threadId: "tkt_open",
+      workerId: "w1",
+      reply: { id: "r_m2", content: "Reboot the set-top box.", model: "echo", tokensIn: null, tokensOut: null, costUsd: null },
+      now: now + 30,
+    });
+    await events.handle(eventFor(db, getMessage(db, "r_m2")!, "agent_reply"));
+    assertEquals(episodes().map((e) => e.sourceThreadId).sort(), ["tkt_closed", "tkt_open"]);
+
+    // A reply on a thread the platform never closed is left to the idle sweep.
+    resolveThread(db, "tkt_still_open", "m3", now + 40);
+    await events.handle(eventFor(db, getMessage(db, "r_m3")!, "agent_reply"));
+    assertEquals(episodes().length, 2);
   });
 });
 
@@ -177,7 +269,6 @@ Deno.test("worker opens a run handle from the configured strategy — for verifi
           toolGuidance: () => "",
         };
       },
-      startJobs: () => null,
       audit: { listCustomers: () => [], listEntries: () => [], archive: () => false, erase: () => 0 },
       describe: () => ({}),
     };
