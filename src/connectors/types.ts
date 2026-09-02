@@ -73,10 +73,14 @@ export interface DeploymentConnector {
 
 export interface EscalationRequest {
   threadId: string;
+  /** Stable across retries of the same queue anchor. */
+  idempotencyKey: string;
   /** Verified customer of the ticket (null on unverified tickets). */
   customerId: string | null;
   /** Internal reason — for the human agent, not the customer. */
   reason: string;
+  /** The concrete decision, information, or action needed from the human. */
+  request: string;
 }
 
 export interface EscalationAck {

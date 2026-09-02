@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS messages (
     role TEXT NOT NULL,                  -- 'customer' | 'assistant' | 'system'
     content TEXT NOT NULL,               -- The message body
     status TEXT NOT NULL,                -- 'pending' | 'processing' | 'completed' | 'failed'
-    in_reply_to TEXT,                    -- Assistant rows: id of the anchor customer message this reply answers
+    in_reply_to TEXT,                    -- Assistant: input anchor; human response: escalated assistant anchor
 
     -- Worker Locking & Queue Management
     worker_id TEXT,                      -- Unique worker instance ID claiming the message
@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS messages (
     tokens_in INTEGER,
     tokens_out INTEGER,
     cost_usd REAL,
-    metadata JSON,                       -- Customer ID, channel, custom tags; assistant rows may carry {escalated, escalation_reason}
+    metadata JSON,                       -- Channel/tags plus escalation/continuation event metadata
     sent_to_customer_at INTEGER,         -- Delivery timestamp stamped by external dispatcher (on failed customer rows: failure-acknowledged timestamp)
 
     created_at INTEGER NOT NULL,         -- Unix timestamp (ms)
@@ -47,6 +47,13 @@ WHERE role = 'assistant' AND status = 'completed' AND sent_to_customer_at IS NUL
 CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_reply_once
 ON messages(in_reply_to)
 WHERE role = 'assistant';
+
+-- Human hand-back is one-shot per escalation. A colleague can start another
+-- round by letting the resumed agent escalate again, producing a new anchor.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_human_escalation_response_once
+ON messages(in_reply_to)
+WHERE role = 'system'
+  AND json_extract(metadata, '$.type') = 'human_escalation_response';
 
 -- Index for external platform to detect permanently failed messages
 CREATE INDEX IF NOT EXISTS idx_messages_failed

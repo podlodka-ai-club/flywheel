@@ -12,6 +12,7 @@ import { buildSupportTools, type ToolRunContext } from "../src/agent/tools/index
 function makeContext(customerId: string | null): ToolRunContext {
   return {
     threadId: "tkt_1",
+    messageId: "msg_anchor",
     customerId,
     connectors: createConnectors(),
     escalation: { escalated: false },
@@ -84,14 +85,29 @@ Deno.test("customer-scoped tools fail without a verified identity or CRM record"
 Deno.test("escalate_to_human calls the ticketing connector and records the escalation + reference", async () => {
   const context = makeContext("google");
   const result = await tool(context, "escalate_to_human")
-    .execute("tc1", { reason: "customer requests refund" }, undefined, undefined);
+    .execute("tc1", {
+      reason: "customer requests refund",
+      request: "Confirm whether the duplicate charge was refunded",
+    }, undefined, undefined);
   assertEquals(context.escalation.escalated, true);
   assertEquals(context.escalation.reason, "customer requests refund");
+  assertEquals(context.escalation.request, "Confirm whether the duplicate charge was refunded");
   // The mocked outbound ticketing call acknowledged with a platform reference.
   assert(/^esc_[0-9a-f]{8}$/.test(context.escalation.externalReference ?? ""));
   const text = resultText(result);
-  assertStringIncludes(text, "specialist will follow up");
+  assertStringIncludes(text, "specialist is reviewing");
   assertStringIncludes(text, context.escalation.externalReference ?? "");
+
+  const retryContext = makeContext("google");
+  await tool(retryContext, "escalate_to_human").execute("tc2", {
+    reason: "customer requests refund",
+    request: "Confirm whether the duplicate charge was refunded",
+  }, undefined, undefined);
+  assertEquals(
+    retryContext.escalation.externalReference,
+    context.escalation.externalReference,
+    "same queue anchor must keep the same external reference across retries",
+  );
 });
 
 Deno.test("escalate_to_human surfaces a rejected ticketing call as a tool error", async () => {
@@ -103,7 +119,13 @@ Deno.test("escalate_to_human surfaces a rejected ticketing call as a tool error"
     },
   };
   await assertRejects(
-    () => tool(context, "escalate_to_human").execute("tc1", { reason: "r" }, undefined, undefined),
+    () =>
+      tool(context, "escalate_to_human").execute(
+        "tc1",
+        { reason: "r", request: "Review it" },
+        undefined,
+        undefined,
+      ),
     Error,
     "did not accept",
   );

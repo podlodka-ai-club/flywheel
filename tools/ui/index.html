@@ -105,6 +105,7 @@
   .msg.customer { align-self: flex-start; border-left: 3px solid var(--accent); }
   .msg.assistant { align-self: flex-end; border-right: 3px solid var(--completed); background: var(--panel-2); }
   .msg.system { align-self: center; color: var(--muted); }
+  .msg.system.human-response { color: var(--text); border-left: 3px solid var(--pending); background: var(--panel-2); }
   .m-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
   .m-role { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
   .m-time { color: var(--muted); font-size: 11px; margin-left: auto; }
@@ -148,6 +149,7 @@
     color: #fff; font-weight: 650; cursor: pointer;
   }
   #send:disabled { opacity: .5; cursor: default; }
+  #composer.muted textarea { opacity: .55; }
   label { color: var(--muted); font-size: 11px; display: block; margin-bottom: 3px; }
 
   #viewToggle { display: flex; gap: 2px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 2px; margin-left: 12px; }
@@ -157,8 +159,39 @@
   }
   #viewToggle button.active { background: var(--panel-2); color: var(--text); }
 
-  #chatView, #dbView, #logsView, #memoryView, #configView { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-  #chatView[hidden], #dbView[hidden], #logsView[hidden], #memoryView[hidden], #configView[hidden] { display: none !important; }
+  #chatView, #escalationsView, #dbView, #logsView, #memoryView, #configView { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  #chatView[hidden], #escalationsView[hidden], #dbView[hidden], #logsView[hidden], #memoryView[hidden], #configView[hidden] { display: none !important; }
+
+  #escBar {
+    padding: 9px 16px; border-bottom: 1px solid var(--border); background: var(--panel);
+    color: var(--muted); font-size: 12px; flex: none;
+  }
+  #escList { flex: 1; overflow: auto; padding: 16px; display: grid; align-content: start; gap: 12px; }
+  .esc-card { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); padding: 14px; max-width: 920px; }
+  .esc-card.awaiting_human { border-left: 3px solid var(--pending); }
+  .esc-card.failed { border-left: 3px solid var(--failed); }
+  .esc-card.continued { opacity: .62; }
+  .esc-head { display: flex; align-items: center; gap: 8px; }
+  .esc-thread { font-weight: 700; }
+  .esc-age { margin-left: auto; color: var(--muted); font-size: 11px; }
+  .esc-grid { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 5px 10px; margin: 11px 0; }
+  .esc-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .esc-value { overflow-wrap: anywhere; }
+  .esc-response { border-top: 1px solid var(--border); padding-top: 10px; }
+  .esc-response textarea, .esc-response input {
+    width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 7px; padding: 8px 10px; font: inherit;
+  }
+  .esc-response textarea { min-height: 76px; resize: vertical; }
+  .esc-response textarea:focus, .esc-response input:focus { outline: none; border-color: var(--accent); }
+  .esc-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .esc-actions button {
+    border: 1px solid var(--border); background: transparent; color: var(--text);
+    border-radius: 7px; padding: 6px 12px; cursor: pointer; font-weight: 650;
+  }
+  .esc-actions button.primary { background: var(--accent); border-color: var(--accent); color: white; margin-left: auto; }
+  .esc-actions button:disabled { opacity: .5; cursor: default; }
+  .esc-note { color: var(--muted); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 
   #configBar { padding: 7px 16px; border-bottom: 1px solid var(--border); background: var(--panel); color: var(--muted); font-size: 11px; flex: none; }
   #configWrap { flex: 1; overflow: auto; padding: 14px 16px; }
@@ -310,6 +343,7 @@
     <span class="sub">dev harness — external platform simulator (ingest &amp; dispatch)</span>
     <nav id="viewToggle">
       <button type="button" data-view="chat" class="active">Conversations</button>
+      <button type="button" data-view="escalations">Escalations</button>
       <button type="button" data-view="db">Database</button>
       <button type="button" data-view="logs">Logs</button>
       <button type="button" data-view="memory">Memory</button>
@@ -354,6 +388,11 @@
           <button id="send" type="submit">Send</button>
         </div>
       </form>
+      </div>
+
+      <div id="escalationsView" hidden>
+        <div id="escBar">Human inbox — loading…</div>
+        <div id="escList"></div>
       </div>
 
       <div id="dbView" hidden>
@@ -465,6 +504,8 @@ const state = {
   stampedIds: new Set(),
   failed: [],
   lastFailedJson: "",
+  escalations: [],
+  lastEscalationsJson: "",
   logs: { entries: [], lastJson: "", meta: "" },
   memory: { records: [], lastJson: "", customer: "" },
   config: { data: null, lastJson: "" },
@@ -586,6 +627,35 @@ function renderThreads() {
   }
 }
 
+function isHumanEscalationResponse(m) {
+  return m.role === "system" && m.metadata && m.metadata.type === "human_escalation_response";
+}
+
+function threadIsHumanMuted() {
+  for (const escalation of state.messages.filter((m) => m.role === "assistant" && m.metadata && m.metadata.escalated)) {
+    const response = state.messages.find((m) => isHumanEscalationResponse(m) && m.inReplyTo === escalation.id);
+    if (!response) return true;
+    const continuation = state.messages.find((m) => m.role === "assistant" && m.inReplyTo === response.id && m.status === "completed");
+    if (!continuation) return true;
+  }
+  return false;
+}
+
+function syncComposerState() {
+  const muted = !!state.active && threadIsHumanMuted();
+  $("composer").classList.toggle("muted", muted);
+  $("content").disabled = muted;
+  $("send").disabled = muted;
+  $("content").placeholder = muted
+    ? "Thread muted while a human colleague reviews or the AI continuation runs…"
+    : "Type a message as the customer… (Enter to send, Shift+Enter for newline)";
+  if (state.active && muted) {
+    $("threadHint").textContent = "Muted — awaiting human guidance or the AI continuation.";
+  } else if (state.active) {
+    $("threadHint").textContent = "";
+  }
+}
+
 function renderMessages() {
   const box = $("messages");
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
@@ -596,6 +666,7 @@ function renderMessages() {
     empty.className = "empty";
     empty.textContent = "Select or create a thread.";
     box.appendChild(empty);
+    syncComposerState();
     return;
   }
   if (state.messages.length === 0) {
@@ -603,12 +674,14 @@ function renderMessages() {
     empty.className = "empty";
     empty.textContent = "No messages in " + state.active + " yet — send one below.";
     box.appendChild(empty);
+    syncComposerState();
     return;
   }
 
   for (const m of state.messages) {
     const el = document.createElement("div");
     el.className = "msg " + m.role;
+    if (isHumanEscalationResponse(m)) el.classList.add("human-response");
     el.title = "Click for technical details";
     el.onclick = () => {
       state.expandedMessage = state.expandedMessage === m.id ? null : m.id;
@@ -619,7 +692,7 @@ function renderMessages() {
     head.className = "m-head";
     const role = document.createElement("span");
     role.className = "m-role";
-    role.textContent = m.role;
+    role.textContent = isHumanEscalationResponse(m) ? "human colleague" : m.role;
     head.appendChild(role);
     head.appendChild(chip(m.status));
     if (m.attemptCount > 1) {
@@ -671,6 +744,13 @@ function renderMessages() {
         esc.title = "metadata.escalated = true — the platform assigns a human and mutes the thread (spec §3.2). Reason: " +
           (m.metadata.escalation_reason || "unspecified");
         head.appendChild(esc);
+      }
+      if (m.metadata && m.metadata.human_assisted) {
+        const resumed = document.createElement("span");
+        resumed.className = "chip completed";
+        resumed.textContent = "human-assisted";
+        resumed.title = "AI continuation after an internal response from a human colleague";
+        head.appendChild(resumed);
       }
       if (m.model) {
         const telemetry = document.createElement("span");
@@ -727,12 +807,14 @@ function renderMessages() {
     box.appendChild(el);
   }
 
+  syncComposerState();
   if (nearBottom) box.scrollTop = box.scrollHeight;
 }
 
 function setView(view) {
   state.view = view;
   $("chatView").hidden = view !== "chat";
+  $("escalationsView").hidden = view !== "escalations";
   $("dbView").hidden = view !== "db";
   $("logsView").hidden = view !== "logs";
   $("memoryView").hidden = view !== "memory";
@@ -744,6 +826,154 @@ function setView(view) {
 document.querySelectorAll("#viewToggle button").forEach((btn) => {
   btn.onclick = () => { setView(btn.dataset.view); refresh(); };
 });
+
+function escalationChip(stateName) {
+  const css = stateName === "awaiting_human" || stateName === "queued"
+    ? "pending"
+    : stateName === "continued"
+    ? "completed"
+    : stateName;
+  const labels = {
+    awaiting_human: "awaiting human",
+    queued: "response queued",
+    processing: "AI continuing",
+    continued: "continued",
+    failed: "continuation failed",
+  };
+  const el = chip(css);
+  el.textContent = labels[stateName] || stateName;
+  return el;
+}
+
+function renderEscalations() {
+  const list = $("escList");
+  list.textContent = "";
+  const active = state.escalations.filter((item) => item.state !== "continued").length;
+  $("escBar").textContent = state.escalations.length === 0
+    ? "Human inbox — no escalations"
+    : "Human inbox — " + active + " active · " + state.escalations.length + " total";
+  if (state.escalations.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "No tickets are waiting for a human colleague.";
+    list.appendChild(empty);
+    return;
+  }
+
+  for (const item of state.escalations) {
+    const m = item.escalation;
+    const meta = m.metadata || {};
+    const card = document.createElement("section");
+    card.className = "esc-card " + item.state;
+
+    const head = document.createElement("div");
+    head.className = "esc-head";
+    const thread = document.createElement("span");
+    thread.className = "esc-thread mono";
+    thread.textContent = m.threadId;
+    const age = document.createElement("span");
+    age.className = "esc-age";
+    age.textContent = fmtAgo(m.createdAt) + " ago";
+    head.append(thread, escalationChip(item.state), age);
+    card.appendChild(head);
+
+    const grid = document.createElement("div");
+    grid.className = "esc-grid";
+    const rows = [
+      ["customer", m.customerId || "unverified"],
+      ["reference", meta.escalation_reference || "not supplied"],
+      ["reason", meta.escalation_reason || "unspecified"],
+      ["human request", meta.escalation_request || "Review the transcript and advise how to continue."],
+      ["customer told", m.content],
+    ];
+    for (const [labelText, valueText] of rows) {
+      const label = document.createElement("div");
+      label.className = "esc-label";
+      label.textContent = labelText;
+      const value = document.createElement("div");
+      value.className = labelText === "reference" ? "esc-value mono" : "esc-value";
+      value.textContent = String(valueText);
+      grid.append(label, value);
+    }
+    card.appendChild(grid);
+
+    const responseBox = document.createElement("div");
+    responseBox.className = "esc-response";
+    if (item.state === "awaiting_human") {
+      const responderLabel = document.createElement("label");
+      responderLabel.textContent = "responder (audit label)";
+      const responder = document.createElement("input");
+      responder.placeholder = "e.g. maria@support";
+      responder.value = "dev-ui operator";
+      const answerLabel = document.createElement("label");
+      answerLabel.style.marginTop = "8px";
+      answerLabel.textContent = "internal answer or action outcome";
+      const answer = document.createElement("textarea");
+      answer.placeholder = "Tell the AI what you decided, found, or changed. This is internal and will not be delivered directly to the customer.";
+      const actions = document.createElement("div");
+      actions.className = "esc-actions";
+      const open = document.createElement("button");
+      open.type = "button";
+      open.textContent = "Open transcript";
+      open.onclick = () => selectThread(m.threadId);
+      const send = document.createElement("button");
+      send.type = "button";
+      send.className = "primary";
+      send.textContent = "Send to AI and continue";
+      send.onclick = async () => {
+        const content = answer.value.trim();
+        if (!content) return toast("Write a response for the AI first", "warn");
+        send.disabled = true;
+        try {
+          const result = await api("/api/escalations/" + encodeURIComponent(m.id) + "/respond", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ content, responder: responder.value.trim() }),
+          });
+          toast(result.inserted ? "Human response queued for the AI ✓" : "Already answered elsewhere", "ok");
+          state.lastEscalationsJson = "";
+          await refresh();
+        } catch (err) {
+          toast("Response failed: " + err.message, "warn");
+          send.disabled = false;
+        }
+      };
+      actions.append(open, send);
+      responseBox.append(responderLabel, responder, answerLabel, answer, actions);
+    } else {
+      const note = document.createElement("div");
+      note.className = "esc-note";
+      if (item.state === "failed") {
+        note.textContent = "The AI continuation failed: " + (item.response?.error || "unknown error");
+      } else if (item.state === "continued") {
+        note.textContent = "Human response: " + (item.response?.content || "") +
+          "\nAI continuation: " + (item.continuation?.content || "completed");
+      } else {
+        note.textContent = "Human response: " + (item.response?.content || "") +
+          "\nThe workflow will continue automatically.";
+      }
+      const actions = document.createElement("div");
+      actions.className = "esc-actions";
+      const open = document.createElement("button");
+      open.type = "button";
+      open.textContent = "Open transcript";
+      open.onclick = () => selectThread(m.threadId);
+      actions.appendChild(open);
+      responseBox.append(note, actions);
+    }
+    card.appendChild(responseBox);
+    list.appendChild(card);
+  }
+}
+
+async function refreshEscalations() {
+  const records = await api("/api/escalations");
+  const recordsJson = JSON.stringify(records);
+  if (recordsJson === state.lastEscalationsJson) return;
+  state.lastEscalationsJson = recordsJson;
+  state.escalations = records;
+  renderEscalations();
+}
 
 function fmtBytes(n) {
   if (n === null || n === undefined) return "n/a";
@@ -1578,6 +1808,9 @@ async function refresh() {
     if (state.view === "db") {
       await refreshDb();
     }
+    if (state.view === "escalations") {
+      await refreshEscalations();
+    }
     if (state.view === "logs") {
       await refreshLogs();
     }
@@ -1640,8 +1873,8 @@ $("composer").onsubmit = async (e) => {
   } catch (err) {
     toast("Send failed: " + err.message, "warn");
   } finally {
-    $("send").disabled = false;
-    $("content").focus();
+    syncComposerState();
+    if (!$("content").disabled) $("content").focus();
   }
 };
 

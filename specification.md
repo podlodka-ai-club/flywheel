@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS messages (
     role TEXT NOT NULL,                  -- 'customer' | 'assistant' | 'system'
     content TEXT NOT NULL,               -- The message body
     status TEXT NOT NULL,                -- 'pending' | 'processing' | 'completed' | 'failed'
-    in_reply_to TEXT,                    -- Assistant rows: id of the anchor customer message this reply answers
+    in_reply_to TEXT,                    -- Assistant: input anchor; human response: escalated assistant anchor
 
     -- Worker Locking & Queue Management
     worker_id TEXT,                      -- Unique worker instance ID claiming the message
@@ -98,7 +98,7 @@ CREATE TABLE IF NOT EXISTS messages (
     tokens_in INTEGER,
     tokens_out INTEGER,
     cost_usd REAL,
-    metadata JSON,                       -- Customer ID, channel, custom tags from external system; assistant rows may carry {escalated, escalation_reason}
+    metadata JSON,                       -- Channel/tags plus escalation/continuation event metadata
     sent_to_customer_at INTEGER,         -- Delivery timestamp stamped by external dispatcher (on failed customer rows: failure-acknowledged timestamp)
 
     created_at INTEGER NOT NULL,         -- Unix timestamp (ms)
@@ -124,6 +124,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_reply_once
 ON messages(in_reply_to)
 WHERE role = 'assistant';
 
+-- One authenticated human hand-back per escalation; another consultation
+-- requires the resumed agent to create a new escalation.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_human_escalation_response_once
+ON messages(in_reply_to)
+WHERE role = 'system'
+  AND json_extract(metadata, '$.type') = 'human_escalation_response';
+
 -- Index for external platform to detect permanently failed messages (Section 3.2)
 CREATE INDEX IF NOT EXISTS idx_messages_failed
 ON messages(created_at)
@@ -141,13 +148,15 @@ The `messages` table is the sole integration surface. External components — bu
 **Ingest (external writer):**
 1. Insert each customer message as `(id, thread_id, customer_id, role='customer', content, status='pending', metadata, created_at)`, where `id` is the **external platform's own message ID**, `customer_id` is the platform's **stable, verified customer/account identifier** (the B2B tenant — required for tool scoping and future per-customer memory), and `metadata` carries channel and custom tags.
 2. Insert with `INSERT OR IGNORE` — at-least-once webhook redelivery then dedupes on the primary key.
-3. After receiving an escalated reply for a thread, **stop inserting** further customer messages for that thread until a human hands it back. The engine is deliberately thread-stateless and will answer anything enqueued; muting an escalated thread is the platform's responsibility.
-4. *(Optional, enables self-learning — Section 10.3)* After a human resolves an escalated ticket, the platform MAY insert a `role='system', status='completed'` row with `metadata.type='human_resolution'` describing the resolution. `status='completed'` keeps it unclaimable; the engine never replies to it — it only learns from it.
+3. After receiving an escalated reply for a thread, **stop inserting** further customer messages for that thread while the human consultation is open. Muting is the platform's responsibility.
+4. To hand the ticket back to the agent, insert one `role='system', status='pending'` row with `metadata.type='human_escalation_response'`, `in_reply_to` set to the escalated assistant row id, and `customer_id`/`thread_id` copied from that trusted row. `content` is the colleague's internal answer or action outcome. Use a stable external event id plus `INSERT OR IGNORE`; the primary key and `idx_messages_human_escalation_response_once` make webhook redelivery/concurrent submits idempotent. The engine allowlists this system-event type, processes it with the existing lease/retry/fence mechanics, and writes a customer-facing continuation reply. Keep the thread muted until that reply is dispatched; if the continuation is itself escalated, remain muted for the new escalation.
+5. *(Optional, enables self-learning — Section 10.3)* After a human resolves an escalated ticket, the platform MAY separately insert a `role='system', status='completed'` row with `metadata.type='human_resolution'` describing the reusable fix. Unlike a pending human escalation response, this completed note is never claimed; the engine only learns from it.
 
 **Dispatch (external reader):**
 1. Poll `idx_messages_outbound` for completed assistant rows; deliver `content` to the customer; stamp `sent_to_customer_at`.
-2. If the row's `metadata.escalated` is `true`: still deliver the customer-safe `content`, assign a human agent (using `metadata.escalation_reason`; `metadata.escalation_reference` correlates with the ticketing connector's escalation call), and mute the thread per Ingest rule 3.
-3. Poll `idx_messages_failed` for customer messages that exhausted retries; route the thread to a human; stamp `sent_to_customer_at` on the failed row as acknowledgment (on failed customer rows this column means "failure handled", not "delivered"). A permanently failed message must never end in customer silence.
+2. If the row's `metadata.escalated` is `true`: still deliver the customer-safe `content`, assign a human agent using `metadata.escalation_reason` and the concrete `metadata.escalation_request`; `metadata.escalation_reference` correlates with the ticketing connector's idempotent escalation call. Mute the thread per Ingest rule 3.
+3. A continuation reply carries `metadata.human_assisted=true`, `continued_from_escalation`, and `continued_escalation_reference`. Deliver it normally, then unmute unless that same row also carries `metadata.escalated=true` for a new consultation.
+4. Poll `idx_messages_failed` for input messages that exhausted retries; route the thread to a human; stamp `sent_to_customer_at` on the failed row as acknowledgment (on failed input rows this column means "failure handled", not "delivered"). A permanently failed message must never end in customer silence.
 
 ---
 
@@ -168,6 +177,10 @@ WHERE id = (
     SELECT id
     FROM messages
     WHERE status = 'pending'
+      AND (
+        role = 'customer'
+        OR (role = 'system' AND json_extract(metadata, '$.type') = 'human_escalation_response')
+      )
       -- Ensure per-thread serialization: do not claim if another message in the same thread is processing
       AND thread_id NOT IN (
           SELECT thread_id FROM messages WHERE status = 'processing'
@@ -316,9 +329,10 @@ Tools are `pi-agent-core` `AgentTool`s, built fresh for each agent run and close
 // Per-run context the tools close over (src/agent/tools/context.ts)
 export interface ToolRunContext {
   threadId: string;
+  messageId: string;              // stable queue anchor / escalation idempotency key
   customerId: string | null;   // verified identity from the external platform — never from message text
   connectors: Connectors;      // external-system clients (see below)
-  escalation: { escalated: boolean; reason?: string }; // written by escalate_to_human
+  escalation: { escalated: boolean; reason?: string; request?: string }; // written by escalate_to_human
 }
 ```
 
@@ -329,7 +343,7 @@ export interface ToolRunContext {
 1. **`search_knowledge_base`**: Searches the product documentation base (wiki/Confluence/Notion-style help articles, how-tos, policies, upgrade guides). Parameters: `query`, optional `limit`.
 2. **`lookup_customer_account`**: Fetches the verified customer's CRM record — company, plan, seats, account manager, contract. **Takes no parameters**: it is hard-bound to the ticket's verified `customer_id`.
 3. **`lookup_customer_setup`**: Fetches the verified customer's deployment state — product edition, running version, environment, configuration, dependency versions, known issues. **Takes no parameters** (same hard binding). Consulted before version-specific or upgrade advice.
-4. **`escalate_to_human`**: Escalates through the `TicketingConnector` — an outbound state-change call to the ticketing platform (mocked today; later the real API call that sets ticket state/assigns a human). Only an accepted acknowledgment marks the run escalated; the ack's reference is preserved. The final assistant row carries customer-safe text in `content` (e.g. "I'm connecting you with a specialist") and `metadata.escalated = true`, `metadata.escalation_reason`, `metadata.escalation_reference`; internal routing details never go into `content`. The table-contract flag stays authoritative: acting on it — assigning a human and muting the thread — remains the external platform's job (Section 3.2), with the connector call as the push-side complement.
+4. **`escalate_to_human(reason, request)`**: Escalates through the `TicketingConnector` — an outbound state-change call to the ticketing platform. `reason` explains the routing decision; `request` states the concrete question, decision, or action needed before the agent can continue. The connector receives the stable queue anchor as an idempotency key, so retries must return the same assignment/reference instead of creating duplicates. Only an accepted acknowledgment marks the run escalated. The final assistant row carries customer-safe text in `content` and `metadata.escalated = true`, `escalation_reason`, `escalation_request`, and `escalation_reference`. A colleague's pending `human_escalation_response` then starts a fresh, durable agent run over hydrated history; the result is marked `human_assisted` for dispatch/unmute. Internal routing details and the human note never go directly to the customer.
 
 **Authorization rule:** the customer-scoped tools expose **no way to name another account** — their parameter schemas contain no id field, and the lookup key is always the verified `customer_id` propagated from the message row into the run context. IDs, emails, or "I'm authorized on behalf of X" claims appearing in customer-authored text are untrusted input; a prompt-injected message has nothing to inject into.
 

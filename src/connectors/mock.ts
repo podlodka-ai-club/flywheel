@@ -86,13 +86,23 @@ class MockDeployments implements DeploymentConnector {
 class MockTicketing implements TicketingConnector {
   escalateTicket(request: EscalationRequest): Promise<EscalationAck> {
     // Later: a real API call to the ticketing platform (set ticket state,
-    // assign a human). The mock just acknowledges with a fabricated reference.
+    // assign a human). Keep references stable across worker retries, mirroring
+    // the idempotency obligation of a production adapter.
     return simulateRequest("ticketing", "escalateTicket", { ...request }, () =>
       Promise.resolve({
         accepted: true,
-        externalReference: `esc_${crypto.randomUUID().slice(0, 8)}`,
+        externalReference: `esc_${stableReference(request.idempotencyKey)}`,
       }));
   }
+}
+
+function stableReference(value: string): string {
+  let hash = 0x811c9dc5;
+  for (const byte of new TextEncoder().encode(value)) {
+    hash ^= byte;
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 export function createMockExternalConnectors(): {

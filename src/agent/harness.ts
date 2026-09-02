@@ -70,6 +70,18 @@ export interface HarnessOptions {
   devFaults?: boolean;
 }
 
+function humanContinuationMetadata(message: MessageRecord): Record<string, unknown> | null {
+  if (
+    message.role !== "system" ||
+    (message.metadata as { type?: string } | null)?.type !== "human_escalation_response"
+  ) return null;
+  return {
+    human_assisted: true,
+    continued_from_escalation: message.inReplyTo,
+    continued_escalation_reference: message.metadata?.escalation_reference ?? null,
+  };
+}
+
 function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (signal?.aborted) return resolve();
@@ -118,6 +130,7 @@ class EchoHarness implements AgentHarness {
       tokensIn: null,
       tokensOut: null,
       costUsd: null,
+      metadata: humanContinuationMetadata(input.message),
     };
   }
 }
@@ -277,6 +290,7 @@ class LlmHarness implements AgentHarness {
   ): Promise<{ ok: true; reply: AgentReply } | { ok: false; error: string }> {
     const toolContext: ToolRunContext = {
       threadId: input.threadId,
+      messageId: input.message.id,
       customerId: input.customerId,
       connectors: this.connectors,
       escalation: { escalated: false },
@@ -341,6 +355,15 @@ class LlmHarness implements AgentHarness {
     if (text === "") {
       return { ok: false, error: "agent reply contained no text content" };
     }
+    const metadata: Record<string, unknown> = humanContinuationMetadata(input.message) ?? {};
+    if (toolContext.escalation.escalated) {
+      Object.assign(metadata, {
+        escalated: true,
+        escalation_reason: toolContext.escalation.reason ?? "unspecified",
+        escalation_request: toolContext.escalation.request ?? "Review the case and advise how to continue.",
+        escalation_reference: toolContext.escalation.externalReference ?? null,
+      });
+    }
     return {
       ok: true,
       reply: {
@@ -349,15 +372,9 @@ class LlmHarness implements AgentHarness {
         tokensIn: reply.usage.input,
         tokensOut: reply.usage.output,
         costUsd: reply.usage.cost.total,
-        // Escalation contract (spec §3.2/§6.1): structured flag for the
-        // dispatcher; the reply text itself stays customer-safe.
-        metadata: toolContext.escalation.escalated
-          ? {
-            escalated: true,
-            escalation_reason: toolContext.escalation.reason ?? "unspecified",
-            escalation_reference: toolContext.escalation.externalReference ?? null,
-          }
-          : null,
+        // Escalation + human-continuation flags are dispatcher-facing; reply
+        // content remains customer-safe.
+        metadata: Object.keys(metadata).length === 0 ? null : metadata,
       },
     };
   }

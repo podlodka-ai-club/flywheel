@@ -9,7 +9,12 @@
 import { assert, assertEquals } from "@std/assert";
 import { join } from "node:path";
 import { openDb } from "../src/db/client.ts";
-import { getMessage, getThreadMessages, insertCustomerMessage } from "../src/db/messages.ts";
+import {
+  getMessage,
+  getThreadMessages,
+  insertCustomerMessage,
+  insertHumanEscalationResponse,
+} from "../src/db/messages.ts";
 import {
   claimNextMessage,
   claimThreadFollowUps,
@@ -46,6 +51,32 @@ Deno.test("claim takes the oldest pending message and leases it", async () => {
     assertEquals(claimed.workerId, "w1");
     assertEquals(claimed.lockedAt, 5000);
     assertEquals(claimed.attemptCount, 1);
+  });
+});
+
+Deno.test("claim allowlists customer messages and human escalation responses only", async () => {
+  await withTempDb((db) => {
+    db.prepare(
+      `INSERT INTO messages (id, thread_id, role, content, status, metadata, created_at)
+       VALUES ('system_bad', 't_bad', 'system', 'operational event', 'pending', '{"type":"other"}', 1)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO messages
+         (id, thread_id, customer_id, role, content, status, metadata, created_at, completed_at)
+       VALUES ('esc_1', 't_human', 'google', 'assistant', 'Reviewing', 'completed',
+         '{"escalated":true,"escalation_reference":"ref_1"}', 2, 2)`,
+    ).run();
+    const handBack = insertHumanEscalationResponse(db, {
+      escalationMessageId: "esc_1",
+      content: "Approved",
+      externalId: "human_1",
+      createdAt: 3,
+    });
+    assertEquals(handBack.outcome, "inserted");
+
+    assertEquals(claimNextMessage(db, "worker", 10)?.id, "human_1");
+    assertEquals(claimNextMessage(db, "worker_2", 11), null);
+    assertEquals(getMessage(db, "system_bad")?.status, "pending");
   });
 });
 

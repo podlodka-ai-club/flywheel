@@ -45,6 +45,26 @@ export interface ThreadSummary {
   failedCount: number;
 }
 
+export type HumanEscalationState =
+  | "awaiting_human"
+  | "queued"
+  | "processing"
+  | "continued"
+  | "failed";
+
+/**
+ * A durable human-in-the-loop exchange derived entirely from message rows.
+ * `escalation` is the assistant reply carrying metadata.escalated=true;
+ * `response` is the linked internal system event submitted by a colleague;
+ * `continuation` is the assistant reply produced from that event.
+ */
+export interface HumanEscalationRecord {
+  escalation: MessageRecord;
+  response: MessageRecord | null;
+  continuation: MessageRecord | null;
+  state: HumanEscalationState;
+}
+
 // deno-lint-ignore no-explicit-any
 export function rowToRecord(row: any): MessageRecord {
   let metadata: Record<string, unknown> | null = null;
@@ -168,6 +188,134 @@ export function insertSystemMessage(
     now,
   );
   return getMessage(db, id)!;
+}
+
+export interface InsertHumanEscalationResponseInput {
+  /** Completed assistant row carrying metadata.escalated=true. */
+  escalationMessageId: string;
+  content: string;
+  /** Stable external event id for webhook-redelivery deduplication. */
+  externalId?: string;
+  channel?: string;
+  /** Audit label supplied by an authenticated platform adapter. */
+  responder?: string;
+  createdAt?: number;
+}
+
+export type InsertHumanEscalationResponseResult =
+  | { outcome: "inserted" | "duplicate"; response: MessageRecord }
+  | { outcome: "not_found" | "not_escalated" | "id_conflict"; response: null };
+
+function isEscalatedAssistant(record: MessageRecord): boolean {
+  return record.role === "assistant" && record.status === "completed" &&
+    record.metadata?.escalated === true;
+}
+
+function humanResponseForEscalation(
+  db: DatabaseSync,
+  escalationMessageId: string,
+): MessageRecord | null {
+  const row = db.prepare(
+    `SELECT * FROM messages
+     WHERE role = 'system' AND in_reply_to = ?
+       AND json_extract(metadata, '$.type') = 'human_escalation_response'
+     ORDER BY created_at ASC, id ASC
+     LIMIT 1`,
+  ).get(escalationMessageId);
+  return row === undefined ? null : rowToRecord(row);
+}
+
+/**
+ * Hand a ticket back from a human colleague to the agent. The new row is an
+ * internal pending event, never customer-authored and never directly
+ * deliverable. Thread/customer/reference are inherited from the trusted
+ * escalation row; callers cannot redirect a response to another account.
+ *
+ * INSERT OR IGNORE plus idx_messages_human_escalation_response_once makes
+ * concurrent UI submits and at-least-once webhooks one-shot and idempotent.
+ */
+export function insertHumanEscalationResponse(
+  db: DatabaseSync,
+  input: InsertHumanEscalationResponseInput,
+): InsertHumanEscalationResponseResult {
+  const escalation = getMessage(db, input.escalationMessageId);
+  if (escalation === null) return { outcome: "not_found", response: null };
+  if (!isEscalatedAssistant(escalation)) {
+    return { outcome: "not_escalated", response: null };
+  }
+
+  const content = input.content.trim();
+  if (content === "") throw new Error("human escalation response content is required");
+  const id = input.externalId?.trim() || `human_${crypto.randomUUID()}`;
+  const escalationReference = typeof escalation.metadata?.escalation_reference === "string"
+    ? escalation.metadata.escalation_reference
+    : null;
+  const metadata: Record<string, unknown> = {
+    type: "human_escalation_response",
+    channel: input.channel?.trim() || "external-platform",
+    escalation_reference: escalationReference,
+  };
+  if (input.responder?.trim()) metadata.responder = input.responder.trim();
+
+  const result = db.prepare(
+    `INSERT OR IGNORE INTO messages
+       (id, thread_id, customer_id, role, content, status, in_reply_to, metadata, created_at)
+     VALUES (?, ?, ?, 'system', ?, 'pending', ?, ?, ?)`,
+  ).run(
+    id,
+    escalation.threadId,
+    escalation.customerId,
+    content,
+    escalation.id,
+    JSON.stringify(metadata),
+    input.createdAt ?? Date.now(),
+  );
+  const response = humanResponseForEscalation(db, escalation.id);
+  if (response === null) {
+    // INSERT OR IGNORE can also lose on a caller-supplied primary-key clash.
+    return { outcome: "id_conflict", response: null };
+  }
+  return {
+    outcome: Number(result.changes) > 0 ? "inserted" : "duplicate",
+    response,
+  };
+}
+
+/**
+ * Operator inbox. State is derived rather than mutated, preserving the
+ * append-only audit trail of escalation -> human response -> AI continuation.
+ */
+export function listHumanEscalations(db: DatabaseSync): HumanEscalationRecord[] {
+  const escalations = db.prepare(
+    `SELECT * FROM messages
+     WHERE role = 'assistant' AND status = 'completed'
+       AND json_extract(metadata, '$.escalated') = 1
+     ORDER BY created_at DESC, id DESC`,
+  ).all().map(rowToRecord);
+
+  return escalations.map((escalation) => {
+    const response = humanResponseForEscalation(db, escalation.id);
+    let continuation: MessageRecord | null = null;
+    if (response !== null) {
+      const row = db.prepare(
+        `SELECT * FROM messages
+         WHERE role = 'assistant' AND in_reply_to = ?
+         ORDER BY created_at ASC, id ASC
+         LIMIT 1`,
+      ).get(response.id);
+      continuation = row === undefined ? null : rowToRecord(row);
+    }
+    const state: HumanEscalationState = response === null
+      ? "awaiting_human"
+      : response.status === "pending"
+      ? "queued"
+      : response.status === "processing"
+      ? "processing"
+      : response.status === "failed"
+      ? "failed"
+      : "continued";
+    return { escalation, response, continuation, state };
+  });
 }
 
 /**
