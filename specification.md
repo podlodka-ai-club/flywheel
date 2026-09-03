@@ -340,9 +340,11 @@ export interface ToolRunContext {
 }
 ```
 
-**Connector seam (`src/connectors/`):** tools never talk to external systems directly — they depend on typed connector interfaces (`KnowledgeBaseConnector`, `CrmConnector`, `DeploymentConnector`). The knowledge-base implementation is the direct local wiki search specified in §6.2; CRM, deployment, and ticketing currently use asynchronous fixture-backed mocks and can be replaced independently by real clients behind the same interfaces, with no tool changes. `TicketingConnector` also exposes the support-platform user directory (`listColleagues()`, fixture `fixtures/colleagues.json`): it feeds the dev harness's person picker for internal team notes (Section 3.2 item 7) and the hand-back responder label, and is never consulted by agent tools.
+**Connector seam (`src/connectors/`):** tools never talk to external systems directly — they depend on typed connector interfaces (`KnowledgeBaseConnector`, `CrmConnector`, `DeploymentConnector`). The knowledge-base implementation is the direct local wiki search specified in §6.2. CRM, deployment, and ticketing currently use asynchronous fixture-backed mocks and can be replaced independently by real clients behind the same interfaces, with no tool changes. While CRM and deployment are mocked, their data-lookup tools are excluded from real LLM runs and assembled only for isolated tests. `escalate_to_human` remains registered because its metadata drives the local escalation-inbox and human-hand-back workflow; the ticketing adapter's acknowledgment remains idempotent. `TicketingConnector` also exposes the support-platform user directory (`listColleagues()`, fixture `fixtures/colleagues.json`) to the dev harness's person picker and hand-back responder label.
 
 ### 6.1. Core Support Tools
+
+Items 1 and 4 are currently registered with real LLM runs. Items 2–3 are fixture-backed data prototypes retained for connector/tool tests and must remain disconnected until their real external adapters are configured.
 
 1. **`search_knowledge_base`**: Searches the product documentation base (wiki/Confluence/Notion-style help articles, how-tos, policies, upgrade guides). Parameters: `query`, optional `limit`.
 2. **`lookup_customer_account`**: Fetches the verified customer's CRM record — company, plan, seats, account manager, contract. **Takes no parameters**: it is hard-bound to the ticket's verified `customer_id`.

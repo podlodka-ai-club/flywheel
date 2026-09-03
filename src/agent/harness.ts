@@ -3,15 +3,23 @@
  * Defines the AgentHarness contract (AgentRunInput → AgentReply) and both
  * implementations: EchoHarness (deterministic key-free testing, optional
  * fault markers) and LlmHarness (the real pi-agent-core loop with system
- * prompt, hydrated history, support tools, per-customer memory through the
- * active memory strategy's run handle, and escalation metadata on replies). Also resolves/validates the LLM provider
+ * prompt, hydrated history, implemented runtime tools, and per-customer
+ * memory through the active memory strategy's run handle). Also resolves/validates the LLM provider
  * setup at startup and owns thinking-level clamping plus the runtime
  * "reasoning is mandatory" bump shared with the summarizer.
  */
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { StreamFn, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import type { Api, AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
+import {
+  clampThinkingLevel,
+  getSupportedThinkingLevels,
+} from "@earendil-works/pi-ai";
+import type {
+  Api,
+  AssistantMessage,
+  Model,
+  Models,
+} from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { logger } from "../logger/index.ts";
 import type { MessageRecord } from "../db/messages.ts";
@@ -69,15 +77,19 @@ export interface HarnessOptions {
   devFaults?: boolean;
 }
 
-function humanContinuationMetadata(message: MessageRecord): Record<string, unknown> | null {
+function humanContinuationMetadata(
+  message: MessageRecord,
+): Record<string, unknown> | null {
   if (
     message.role !== "system" ||
-    (message.metadata as { type?: string } | null)?.type !== "human_escalation_response"
+    (message.metadata as { type?: string } | null)?.type !==
+      "human_escalation_response"
   ) return null;
   return {
     human_assisted: true,
     continued_from_escalation: message.inReplyTo,
-    continued_escalation_reference: message.metadata?.escalation_reference ?? null,
+    continued_escalation_reference: message.metadata?.escalation_reference ??
+      null,
   };
 }
 
@@ -105,7 +117,10 @@ class EchoHarness implements AgentHarness {
   constructor(private readonly devFaults: boolean) {}
 
   async run(input: AgentRunInput): Promise<AgentReply> {
-    const texts = [input.message.content, ...(input.followUps ?? []).map((m) => m.content)];
+    const texts = [
+      input.message.content,
+      ...(input.followUps ?? []).map((m) => m.content),
+    ];
     if (this.devFaults) {
       const joined = texts.join("\n");
       // [[sleep_once:ms]] delays only the first attempt — retries run instantly,
@@ -113,11 +128,17 @@ class EchoHarness implements AgentHarness {
       // [[sleep]] longer than the lease would starve into 'failed').
       const sleepOnceMatch = joined.match(/\[\[sleep_once:(\d{1,6})\]\]/);
       if (sleepOnceMatch && input.message.attemptCount <= 1) {
-        await abortableSleep(Math.min(Number(sleepOnceMatch[1]), 120_000), input.signal);
+        await abortableSleep(
+          Math.min(Number(sleepOnceMatch[1]), 120_000),
+          input.signal,
+        );
       }
       const sleepMatch = joined.match(/\[\[sleep:(\d{1,6})\]\]/);
       if (sleepMatch) {
-        await abortableSleep(Math.min(Number(sleepMatch[1]), 120_000), input.signal);
+        await abortableSleep(
+          Math.min(Number(sleepMatch[1]), 120_000),
+          input.signal,
+        );
       }
       if (joined.includes("[[fail]]")) {
         throw new Error("DEV_FAULTS: [[fail]] marker triggered");
@@ -148,7 +169,15 @@ export function nextSupportedThinkingLevel(
   model: Model<Api>,
   current: ThinkingLevel,
 ): ThinkingLevel | null {
-  const order: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+  const order: ThinkingLevel[] = [
+    "off",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+  ];
   const supported = getSupportedThinkingLevels(model);
   for (const level of order.slice(order.indexOf(current) + 1)) {
     if (supported.includes(level)) return level;
@@ -190,11 +219,15 @@ export function resolveLlmSetup(
   input: { llmProvider: string; llmModel: string; llmThinking?: ThinkingLevel },
 ): LlmSetup {
   const provider = input.llmProvider;
-  const modelId = input.llmModel !== "" ? input.llmModel : DEFAULT_LLM_MODELS[provider];
+  const modelId = input.llmModel !== ""
+    ? input.llmModel
+    : DEFAULT_LLM_MODELS[provider];
   if (modelId === undefined) {
     throw new Error(
       `LLM_PROVIDER "${provider}" has no default model — set LLM_MODEL explicitly ` +
-        `(supported out of the box: ${Object.keys(DEFAULT_LLM_MODELS).join(", ")})`,
+        `(supported out of the box: ${
+          Object.keys(DEFAULT_LLM_MODELS).join(", ")
+        })`,
     );
   }
   const keyEnv = PROVIDER_KEY_ENVS[provider] ??
@@ -204,10 +237,17 @@ export function resolveLlmSetup(
     throw new Error(
       `AGENT_MODE=llm needs an API key: set ${keyEnv} in your environment or in a .env file ` +
         `(the start task loads .env automatically). Alternatives: switch provider via LLM_PROVIDER ` +
-        `(${Object.keys(DEFAULT_LLM_MODELS).join(", ")}), or run without an LLM via AGENT_MODE=echo.`,
+        `(${
+          Object.keys(DEFAULT_LLM_MODELS).join(", ")
+        }), or run without an LLM via AGENT_MODE=echo.`,
     );
   }
-  return { provider, modelId, apiKey, thinkingLevel: input.llmThinking ?? "off" };
+  return {
+    provider,
+    modelId,
+    apiKey,
+    thinkingLevel: input.llmThinking ?? "off",
+  };
 }
 
 export interface LlmHarnessOptions extends LlmSetup {
@@ -234,17 +274,21 @@ class LlmHarness implements AgentHarness {
   /** Mutable: bumped and memoized when the provider rejects the level. */
   private thinkingLevel: ThinkingLevel;
 
-
   constructor(private readonly options: LlmHarnessOptions) {
     this.models = options.models ?? builtinModels();
-    const model = options.model ?? this.models.getModel(options.provider, options.modelId);
+    const model = options.model ??
+      this.models.getModel(options.provider, options.modelId);
     if (model === undefined) {
-      const sample = this.models.getModels(options.provider).slice(0, 5).map((m) => m.id);
+      const sample = this.models.getModels(options.provider).slice(0, 5).map((
+        m,
+      ) => m.id);
       throw new Error(
         `Model "${options.modelId}" not found for provider "${options.provider}". ` +
           (sample.length > 0
             ? `Examples of valid LLM_MODEL values: ${sample.join(", ")}`
-            : `Unknown provider — supported examples: ${Object.keys(DEFAULT_LLM_MODELS).join(", ")}`),
+            : `Unknown provider — supported examples: ${
+              Object.keys(DEFAULT_LLM_MODELS).join(", ")
+            }`),
       );
     }
     this.model = model;
@@ -259,7 +303,8 @@ class LlmHarness implements AgentHarness {
       });
     }
     this.streamFn = options.streamFn ??
-      ((m, context, streamOptions) => this.models.streamSimple(m, context, streamOptions));
+      ((m, context, streamOptions) =>
+        this.models.streamSimple(m, context, streamOptions));
     this.connectors = options.connectors ?? createConnectors();
   }
 
@@ -331,7 +376,9 @@ class LlmHarness implements AgentHarness {
     const stopOnAbort = () => agent.abort();
     input.signal?.addEventListener("abort", stopOnAbort, { once: true });
     try {
-      await agent.prompt(buildPromptMessages(input.message, input.followUps ?? []));
+      await agent.prompt(
+        buildPromptMessages(input.message, input.followUps ?? []),
+      );
     } finally {
       input.signal?.removeEventListener("abort", stopOnAbort);
     }
@@ -339,28 +386,36 @@ class LlmHarness implements AgentHarness {
     const reply = [...agent.state.messages].reverse()
       .find((m): m is AssistantMessage => m.role === "assistant");
     if (reply === undefined) {
-      return { ok: false, error: agent.state.errorMessage ?? "agent produced no assistant reply" };
+      return {
+        ok: false,
+        error: agent.state.errorMessage ?? "agent produced no assistant reply",
+      };
     }
     if (reply.stopReason === "error" || reply.stopReason === "aborted") {
       return {
         ok: false,
-        error: reply.errorMessage ?? `LLM run ended with stopReason=${reply.stopReason}`,
+        error: reply.errorMessage ??
+          `LLM run ended with stopReason=${reply.stopReason}`,
       };
     }
     const text = reply.content
-      .filter((block): block is Extract<typeof block, { type: "text" }> => block.type === "text")
+      .filter((block): block is Extract<typeof block, { type: "text" }> =>
+        block.type === "text"
+      )
       .map((block) => block.text)
       .join("\n")
       .trim();
     if (text === "") {
       return { ok: false, error: "agent reply contained no text content" };
     }
-    const metadata: Record<string, unknown> = humanContinuationMetadata(input.message) ?? {};
+    const metadata: Record<string, unknown> =
+      humanContinuationMetadata(input.message) ?? {};
     if (toolContext.escalation.escalated) {
       Object.assign(metadata, {
         escalated: true,
         escalation_reason: toolContext.escalation.reason ?? "unspecified",
-        escalation_request: toolContext.escalation.request ?? "Review the case and advise how to continue.",
+        escalation_request: toolContext.escalation.request ??
+          "Review the case and advise how to continue.",
         escalation_reference: toolContext.escalation.externalReference ?? null,
       });
     }
@@ -368,7 +423,9 @@ class LlmHarness implements AgentHarness {
       ok: true,
       reply: {
         content: text,
-        model: `${this.options.provider}:${reply.model || this.options.modelId}`,
+        model: `${this.options.provider}:${
+          reply.model || this.options.modelId
+        }`,
         tokensIn: reply.usage.input,
         tokensOut: reply.usage.output,
         costUsd: reply.usage.cost.total,

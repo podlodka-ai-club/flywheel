@@ -3,10 +3,11 @@
  * verified identity — customer-scoped tools take NO id argument from the
  * model, so prompt-injected "look up account X" has nothing to grab.
  *
- * One file per core tool; this module assembles the set for a run — the core
- * tools plus whatever the active memory strategy contributes through its run
- * handle (spec §10.8) — and wraps every tool with tool_executed/tool_failed
- * logging. Shared context lives in context.ts.
+ * One file per core tool. The real LLM receives only implemented runtime
+ * capabilities (local knowledge-base search, escalation, plus the active
+ * memory strategy's tools). Fixture-backed CRM/deployment lookups are assembled
+ * separately for tests so fake customer data cannot consume real model rounds
+ * or influence customer replies.
  */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { logger } from "../../logger/index.ts";
@@ -32,9 +33,11 @@ function instrument(context: ToolRunContext, tool: AgentTool): AgentTool {
           customerId: context.customerId,
           toolName: tool.name,
           args: params,
-          resultCount: typeof (result.details as { resultCount?: unknown } | undefined)?.resultCount === "number"
-            ? (result.details as { resultCount: number }).resultCount
-            : undefined,
+          resultCount:
+            typeof (result.details as { resultCount?: unknown } | undefined)
+                ?.resultCount === "number"
+              ? (result.details as { resultCount: number }).resultCount
+              : undefined,
           durationMs: Date.now() - startedAt,
         });
         return result;
@@ -53,17 +56,38 @@ function instrument(context: ToolRunContext, tool: AgentTool): AgentTool {
   };
 }
 
+function instrumentAll(
+  context: ToolRunContext,
+  tools: AgentTool[],
+): AgentTool[] {
+  return tools.map((tool) => instrument(context, tool));
+}
+
+/** Tools safe to expose to the real LLM runtime. */
 export function buildSupportTools(context: ToolRunContext): AgentTool[] {
-  const tools = [
+  return instrumentAll(context, [
     buildSearchKnowledgeBase(context),
-    buildLookupCustomerAccount(context),
-    buildLookupCustomerSetup(context),
     buildEscalateToHuman(context),
     // Memory tools come from the strategy's run handle, which the worker opens
     // only for verified customers with memory enabled — no verified identity,
     // no memory reads or writes (spec §10.1). The seam requires them to be
     // id-free, like every other customer-scoped tool.
     ...(context.memory?.tools() ?? []),
-  ];
-  return tools.map((tool) => instrument(context, tool));
+  ]);
+}
+
+/**
+ * Complete tool set, including fixture-backed CRM/deployment lookups, for
+ * isolated connector/tool tests. Never pass this set to a real provider run.
+ */
+export function buildFixtureBackedSupportTools(
+  context: ToolRunContext,
+): AgentTool[] {
+  return instrumentAll(context, [
+    buildSearchKnowledgeBase(context),
+    buildLookupCustomerAccount(context),
+    buildLookupCustomerSetup(context),
+    buildEscalateToHuman(context),
+    ...(context.memory?.tools() ?? []),
+  ]);
 }

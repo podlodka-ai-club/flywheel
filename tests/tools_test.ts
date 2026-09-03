@@ -5,9 +5,18 @@
  * escalation recording the ticketing ack (reason + reference) or surfacing
  * a rejected call as a tool error.
  */
-import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+} from "@std/assert";
 import { createConnectors } from "../src/connectors/index.ts";
-import { buildSupportTools, type ToolRunContext } from "../src/agent/tools/index.ts";
+import {
+  buildFixtureBackedSupportTools,
+  buildSupportTools,
+  type ToolRunContext,
+} from "../src/agent/tools/index.ts";
 
 function makeContext(customerId: string | null): ToolRunContext {
   return {
@@ -20,19 +29,37 @@ function makeContext(customerId: string | null): ToolRunContext {
 }
 
 function tool(context: ToolRunContext, name: string) {
-  const found = buildSupportTools(context).find((t) => t.name === name);
+  const found = buildFixtureBackedSupportTools(context).find((t) =>
+    t.name === name
+  );
   assert(found !== undefined, `tool ${name} missing`);
   return found;
 }
 
-function resultText(result: { content: { type: string; text?: string }[] }): string {
-  return result.content.filter((b) => b.type === "text").map((b) => b.text ?? "").join("\n");
+function resultText(
+  result: { content: { type: string; text?: string }[] },
+): string {
+  return result.content.filter((b) => b.type === "text").map((b) =>
+    b.text ?? ""
+  ).join("\n");
 }
+
+Deno.test("real LLM tool set excludes fixture-backed customer-data lookups", () => {
+  const names = buildSupportTools(makeContext("google")).map((tool) =>
+    tool.name
+  );
+  assertEquals(names, ["search_knowledge_base", "escalate_to_human"]);
+});
 
 Deno.test("search_knowledge_base returns relevant Acme wiki articles", async () => {
   const context = makeContext("google");
   const result = await tool(context, "search_knowledge_base")
-    .execute("tc1", { query: "content not updating on TV after publish" }, undefined, undefined);
+    .execute(
+      "tc1",
+      { query: "content not updating on TV after publish" },
+      undefined,
+      undefined,
+    );
   const text = resultText(result);
   assertStringIncludes(text, "T-TV-09 — Content does not update on the TV");
   assertStringIncludes(text, "t-tv-09");
@@ -43,7 +70,12 @@ Deno.test("search_knowledge_base returns relevant Acme wiki articles", async () 
 Deno.test("search_knowledge_base admits when nothing matches", async () => {
   const context = makeContext("google");
   const result = await tool(context, "search_knowledge_base")
-    .execute("tc1", { query: "quantum blockchain espresso" }, undefined, undefined);
+    .execute(
+      "tc1",
+      { query: "quantum blockchain espresso" },
+      undefined,
+      undefined,
+    );
   assertStringIncludes(resultText(result), "No documentation articles matched");
 });
 
@@ -52,7 +84,10 @@ Deno.test("customer-scoped tools are bound to the verified identity and take no 
   for (const name of ["lookup_customer_account", "lookup_customer_setup"]) {
     const t = tool(context, name);
     // The scoping property: the schema exposes NO way to name another account.
-    assertEquals(Object.keys((t.parameters as { properties?: object }).properties ?? {}), []);
+    assertEquals(
+      Object.keys((t.parameters as { properties?: object }).properties ?? {}),
+      [],
+    );
   }
 
   const account = await tool(context, "lookup_customer_account")
@@ -69,14 +104,26 @@ Deno.test("customer-scoped tools are bound to the verified identity and take no 
 Deno.test("customer-scoped tools fail without a verified identity or CRM record", async () => {
   const anonymous = makeContext(null);
   await assertRejects(
-    () => tool(anonymous, "lookup_customer_account").execute("tc1", {}, undefined, undefined),
+    () =>
+      tool(anonymous, "lookup_customer_account").execute(
+        "tc1",
+        {},
+        undefined,
+        undefined,
+      ),
     Error,
     "no verified customer identity",
   );
 
   const unknown = makeContext("cust_does_not_exist");
   await assertRejects(
-    () => tool(unknown, "lookup_customer_setup").execute("tc1", {}, undefined, undefined),
+    () =>
+      tool(unknown, "lookup_customer_setup").execute(
+        "tc1",
+        {},
+        undefined,
+        undefined,
+      ),
     Error,
     "No deployment record",
   );
@@ -85,13 +132,21 @@ Deno.test("customer-scoped tools fail without a verified identity or CRM record"
 Deno.test("escalate_to_human calls the ticketing connector and records the escalation + reference", async () => {
   const context = makeContext("google");
   const result = await tool(context, "escalate_to_human")
-    .execute("tc1", {
-      reason: "customer requests refund",
-      request: "Confirm whether the duplicate charge was refunded",
-    }, undefined, undefined);
+    .execute(
+      "tc1",
+      {
+        reason: "customer requests refund",
+        request: "Confirm whether the duplicate charge was refunded",
+      },
+      undefined,
+      undefined,
+    );
   assertEquals(context.escalation.escalated, true);
   assertEquals(context.escalation.reason, "customer requests refund");
-  assertEquals(context.escalation.request, "Confirm whether the duplicate charge was refunded");
+  assertEquals(
+    context.escalation.request,
+    "Confirm whether the duplicate charge was refunded",
+  );
   // The mocked outbound ticketing call acknowledged with a platform reference.
   assert(/^esc_[0-9a-f]{8}$/.test(context.escalation.externalReference ?? ""));
   const text = resultText(result);
@@ -99,10 +154,15 @@ Deno.test("escalate_to_human calls the ticketing connector and records the escal
   assertStringIncludes(text, context.escalation.externalReference ?? "");
 
   const retryContext = makeContext("google");
-  await tool(retryContext, "escalate_to_human").execute("tc2", {
-    reason: "customer requests refund",
-    request: "Confirm whether the duplicate charge was refunded",
-  }, undefined, undefined);
+  await tool(retryContext, "escalate_to_human").execute(
+    "tc2",
+    {
+      reason: "customer requests refund",
+      request: "Confirm whether the duplicate charge was refunded",
+    },
+    undefined,
+    undefined,
+  );
   assertEquals(
     retryContext.escalation.externalReference,
     context.escalation.externalReference,
@@ -115,7 +175,8 @@ Deno.test("escalate_to_human surfaces a rejected ticketing call as a tool error"
   context.connectors = {
     ...context.connectors,
     ticketing: {
-      escalateTicket: () => Promise.resolve({ accepted: false, externalReference: "" }),
+      escalateTicket: () =>
+        Promise.resolve({ accepted: false, externalReference: "" }),
       listColleagues: () => Promise.resolve([]),
     },
   };
@@ -139,6 +200,9 @@ Deno.test("ticketing connector exposes the support-user directory behind the tea
   const ids = colleagues.map((c) => c.id);
   assertEquals(new Set(ids).size, ids.length, "colleague ids must be unique");
   for (const c of colleagues) {
-    assert(c.id.trim() !== "" && c.name.trim() !== "", "id and name are required");
+    assert(
+      c.id.trim() !== "" && c.name.trim() !== "",
+      "id and name are required",
+    );
   }
 });
