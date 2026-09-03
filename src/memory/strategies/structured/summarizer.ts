@@ -1,8 +1,10 @@
 /**
  * End-of-ticket summarizer (spec §10.3, write paths 2 & 3): terminal threads
  * get one `episode` memory; threads carrying platform-inserted
- * human_resolution notes additionally get a `playbook` — the self-learning
- * loop that lowers escalation rates over time. Two triggers feed the same
+ * human_resolution notes or an internal team discussion (internal_note rows)
+ * additionally get a `playbook` — the self-learning loop that lowers
+ * escalation rates over time. Playbook provenance is assigned here from the
+ * row types present, never from what the model claims. Two triggers feed the same
  * pipeline: the idle sweep (`summarizeOnce`, run as the strategy's job on
  * `summarizerIntervalMs`) and the platform's ticket_closed note
  * (`summarizeThreadNow`, from the strategy's event handler). The unique
@@ -13,12 +15,16 @@ import type { DatabaseSync } from "node:sqlite";
 import type { MessageRecord } from "../../../db/messages.ts";
 import { getThreadMessages } from "../../../db/messages.ts";
 import { logger } from "../../../logger/index.ts";
-import { EPISODE_TTL_MS, episodeExists, saveMemory } from "./store.ts";
+import { EPISODE_TTL_MS, episodeExists, type MemoryProvenance, saveMemory } from "./store.ts";
 
 export interface ThreadSummary {
   /** 1–3 sentences: issue, what was done, outcome. */
   episode: string;
-  /** Symptom→fix distilled from a human resolution note; null without one. */
+  /**
+   * Symptom→fix distilled from a human resolution note or the conclusion of
+   * the internal team discussion; null without either. Persisted only when
+   * the transcript actually carries such rows (playbookProvenanceFor).
+   */
   playbook: string | null;
 }
 
@@ -97,6 +103,7 @@ export interface SummarizedThread {
   threadId: string;
   episodeId: string;
   playbookId: string | null;
+  playbookProvenance: MemoryProvenance | null;
 }
 
 /**
@@ -130,13 +137,18 @@ export async function summarizeThread(
       activeCap: args.activeCap,
       now: args.now,
     });
+    // Provenance comes from the rows on the bus, not from the model: a
+    // playbook returned for a thread with neither note type is dropped.
+    const playbookProvenance = playbookProvenanceFor(messages);
     let playbookId: string | null = null;
-    if (summary.playbook !== null && summary.playbook.trim() !== "") {
+    if (
+      playbookProvenance !== null && summary.playbook !== null && summary.playbook.trim() !== ""
+    ) {
       playbookId = saveMemory(db, {
         customerId: candidate.customerId,
         kind: "playbook",
         content: summary.playbook.trim(),
-        provenance: "human_resolution",
+        provenance: playbookProvenance,
         sourceThreadId: candidate.threadId,
         activeCap: args.activeCap,
         now: args.now,
@@ -147,9 +159,15 @@ export async function summarizeThread(
       customerId: candidate.customerId,
       episodeId: episode.id,
       playbookId,
+      playbookProvenance: playbookId === null ? null : playbookProvenance,
       trigger: args.trigger,
     });
-    return { threadId: candidate.threadId, episodeId: episode.id, playbookId };
+    return {
+      threadId: candidate.threadId,
+      episodeId: episode.id,
+      playbookId,
+      playbookProvenance: playbookId === null ? null : playbookProvenance,
+    };
   } catch (err) {
     // UNIQUE violation = another process summarized concurrently: fine.
     if (err instanceof Error && err.message.includes("UNIQUE")) return null;
@@ -217,10 +235,36 @@ export async function summarizeThreadNow(
 // ---------------------------------------------------------------------------
 // Summarize implementations
 
-function humanResolutionNotes(messages: MessageRecord[]): MessageRecord[] {
+function systemNotesOfType(messages: MessageRecord[], type: string): MessageRecord[] {
   return messages.filter((m) =>
-    m.role === "system" && (m.metadata as { type?: string } | null)?.type === "human_resolution"
+    m.role === "system" && (m.metadata as { type?: string } | null)?.type === type
   );
+}
+
+function humanResolutionNotes(messages: MessageRecord[]): MessageRecord[] {
+  return systemNotesOfType(messages, "human_resolution");
+}
+
+/** Internal team discussion rows (spec §3.2 item 7), oldest first. */
+export function internalTeamNotes(messages: MessageRecord[]): MessageRecord[] {
+  return systemNotesOfType(messages, "internal_note");
+}
+
+/** Display name embedded in an internal_note row; the directory is not consulted. */
+export function internalNoteAuthor(message: MessageRecord): string {
+  const author = (message.metadata as { author?: { name?: unknown } } | null)?.author;
+  return typeof author?.name === "string" && author.name.trim() !== "" ? author.name : "colleague";
+}
+
+/**
+ * Which human-taught source a playbook for this transcript is attributed to:
+ * an explicit resolution note wins over the team discussion; without either
+ * no playbook may be stored, whatever the summarizer returned.
+ */
+export function playbookProvenanceFor(messages: MessageRecord[]): MemoryProvenance | null {
+  if (humanResolutionNotes(messages).length > 0) return "human_resolution";
+  if (internalTeamNotes(messages).length > 0) return "team_discussion";
+  return null;
 }
 
 /** Deterministic summarizer for AGENT_MODE=echo — memory is testable key-free. */
@@ -229,13 +273,23 @@ export function createEchoThreadSummarizer(): ThreadSummarizeFn {
     const firstCustomer = input.messages.find((m) => m.role === "customer");
     const lastAssistant = [...input.messages].reverse().find((m) => m.role === "assistant");
     const resolutions = humanResolutionNotes(input.messages);
+    const teamNotes = internalTeamNotes(input.messages);
+    const symptom = (firstCustomer?.content ?? "similar issue").slice(0, 100);
     const episode = `Ticket about: ${(firstCustomer?.content ?? "(no customer message)").slice(0, 120)} | ` +
       `Outcome: ${(lastAssistant?.content ?? "(no reply)").slice(0, 120)}`;
-    const playbook = resolutions.length > 0
-      ? `When: ${(firstCustomer?.content ?? "similar issue").slice(0, 100)} | Fix (human): ${
+    let playbook: string | null = null;
+    if (resolutions.length > 0) {
+      playbook = `When: ${symptom} | Fix (human): ${
         resolutions.map((m) => m.content).join(" ").slice(0, 200)
-      }`
-      : null;
+      }`;
+    } else if (teamNotes.length > 0) {
+      // The last note stands in for "the conclusion the team reached" — the
+      // deterministic proxy for what the LLM summarizer distills.
+      const conclusion = teamNotes[teamNotes.length - 1];
+      playbook = `When: ${symptom} | Fix (team, ${internalNoteAuthor(conclusion)}): ${
+        conclusion.content.slice(0, 200)
+      }`;
+    }
     return Promise.resolve({ episode, playbook });
   };
 }

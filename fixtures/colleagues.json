@@ -1,0 +1,22 @@
+[
+  {
+    "id": "ana",
+    "name": "Ana Petrova",
+    "title": "Support engineer (Tier 2)"
+  },
+  {
+    "id": "ben",
+    "name": "Ben Okoro",
+    "title": "Support engineer"
+  },
+  {
+    "id": "mira",
+    "name": "Mira Lindqvist",
+    "title": "Escalation lead"
+  },
+  {
+    "id": "dev",
+    "name": "Dev-UI operator",
+    "title": "Harness default"
+  }
+]

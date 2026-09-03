@@ -89,6 +89,13 @@ export interface EscalationAck {
   externalReference: string;
 }
 
+/** A support-platform user (engineer, lead) — the people behind internal notes and hand-backs. */
+export interface Colleague {
+  id: string;
+  name: string;
+  title: string;
+}
+
 /**
  * Ticketing platform state changes. The real implementation will call the
  * external system's API (e.g. Zendesk: set ticket state, assign a human);
@@ -97,6 +104,12 @@ export interface EscalationAck {
  */
 export interface TicketingConnector {
   escalateTicket(request: EscalationRequest, signal?: AbortSignal): Promise<EscalationAck>;
+  /**
+   * Support-user directory. Drives the harness person picker for internal
+   * team notes and supplies the hand-back responder label; never consulted
+   * by agent tools.
+   */
+  listColleagues(signal?: AbortSignal): Promise<Colleague[]>;
 }
 
 export interface Connectors {

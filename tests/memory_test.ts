@@ -168,12 +168,14 @@ Deno.test("rendering: facts+playbooks before episodes, claims labeled, budget en
     mk("episode", "ticket_summary", "old ticket about exports", 3000),
     mk("fact", "customer_stated", "maintenance window Sunday", 1000),
     mk("playbook", "human_resolution", "Symptom: webhook timeouts -> Fix: raise batch size", 2000),
+    mk("playbook", "team_discussion", "Symptom: TV content stale -> Fix: republish the channel list", 2500),
   ], 1000);
   const lines = rendered.text.split("\n");
   assertStringIncludes(lines[0], "claimed by customer");
   assertStringIncludes(lines[0], "unverified");
-  assertStringIncludes(lines[1], "playbook from human resolution");
-  assertStringIncludes(lines[2], "past ticket tkt_9");
+  assertStringIncludes(lines[1], "playbook from team discussion"); // newest playbook first
+  assertStringIncludes(lines[2], "playbook from human resolution");
+  assertStringIncludes(lines[3], "past ticket tkt_9");
 
   const tight = renderMemoriesForPrompt([
     mk("fact", "customer_stated", "x".repeat(400), 1000),

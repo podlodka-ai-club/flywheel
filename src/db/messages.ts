@@ -406,6 +406,7 @@ export function listThreads(db: DatabaseSync): ThreadSummary[] {
        MAX(created_at) AS last_activity_at,
        (SELECT content FROM messages last
         WHERE last.thread_id = m.thread_id
+          AND NOT (last.role = 'system' AND json_extract(last.metadata, '$.type') = 'internal_note')
         ORDER BY last.created_at DESC, last.id DESC LIMIT 1) AS last_content,
        SUM(status = 'pending') AS pending_count,
        SUM(status = 'processing') AS processing_count,

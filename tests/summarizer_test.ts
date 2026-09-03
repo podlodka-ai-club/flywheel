@@ -14,6 +14,7 @@ import { listActiveMemories } from "../src/memory/strategies/structured/store.ts
 import {
   createEchoThreadSummarizer,
   findSummarizableThreads,
+  playbookProvenanceFor,
   summarizeOnce,
 } from "../src/memory/strategies/structured/summarizer.ts";
 
@@ -111,7 +112,97 @@ Deno.test("summarizer: human resolution notes distill into a playbook (self-lear
     const playbooks = listActiveMemories(db, "google", 100_001).filter((m) => m.kind === "playbook");
     assertEquals(playbooks.length, 1);
     assertEquals(playbooks[0].provenance, "human_resolution");
+    assertEquals(result.summarized[0].playbookProvenance, "human_resolution");
     assertStringIncludes(playbooks[0].content, "batch size");
     assertEquals(playbooks[0].expiresAt, null, "playbooks persist");
+  });
+});
+
+function teamNote(
+  db: ReturnType<typeof openDb>,
+  threadId: string,
+  author: { id: string; name: string },
+  content: string,
+  createdAt: number,
+) {
+  return insertSystemMessage(db, {
+    threadId,
+    content,
+    customerId: "google",
+    metadata: { type: "internal_note", channel: "dev-ui", author },
+    createdAt,
+  });
+}
+
+const ANA = { id: "ana", name: "Ana Petrova" };
+const BEN = { id: "ben", name: "Ben Okoro" };
+
+Deno.test("summarizer: an internal team discussion distills into a team_discussion playbook from its conclusion", async () => {
+  await withTempDb(async (db) => {
+    resolveThread(db, "tkt_team", "m1", 1000);
+    teamNote(db, "tkt_team", ANA, "Probably the firewall dropping keepalives?", 2000);
+    teamNote(db, "tkt_team", BEN, "No — it's the webhook batch size. Raise it to 100 in Admin → Integrations.", 3000);
+
+    const result = await summarizeOnce(db, createEchoThreadSummarizer(), {
+      now: 100_000,
+      summarizeAfterMs: 50_000,
+      activeCap: 100,
+    });
+    assertEquals(result.summarized.length, 1);
+    assert(result.summarized[0].playbookId !== null, "expected a playbook");
+    assertEquals(result.summarized[0].playbookProvenance, "team_discussion");
+
+    const playbooks = listActiveMemories(db, "google", 100_001).filter((m) => m.kind === "playbook");
+    assertEquals(playbooks.length, 1);
+    assertEquals(playbooks[0].provenance, "team_discussion");
+    assertStringIncludes(playbooks[0].content, "Fix (team, Ben Okoro)");
+    assertStringIncludes(playbooks[0].content, "batch size");
+    assert(!playbooks[0].content.includes("firewall"), "withdrawn hypotheses must not become the playbook");
+    assertEquals(playbooks[0].expiresAt, null, "playbooks persist");
+  });
+});
+
+Deno.test("summarizer: a resolution note takes precedence over the team discussion for playbook provenance", async () => {
+  await withTempDb(async (db) => {
+    resolveThread(db, "tkt_both", "m1", 1000);
+    teamNote(db, "tkt_both", ANA, "Could be the batch size", 2000);
+    insertSystemMessage(db, {
+      threadId: "tkt_both",
+      content: "Raised webhook batch size to 100.",
+      customerId: "google",
+      metadata: { type: "human_resolution" },
+      createdAt: 3000,
+    });
+
+    const result = await summarizeOnce(db, createEchoThreadSummarizer(), {
+      now: 100_000,
+      summarizeAfterMs: 50_000,
+      activeCap: 100,
+    });
+    assertEquals(result.summarized[0].playbookProvenance, "human_resolution");
+    const playbooks = listActiveMemories(db, "google", 100_001).filter((m) => m.kind === "playbook");
+    assertEquals(playbooks.length, 1);
+    assertEquals(playbooks[0].provenance, "human_resolution");
+    assertStringIncludes(playbooks[0].content, "Fix (human)");
+  });
+});
+
+Deno.test("summarizer: a playbook the model returns without any human-taught rows is dropped (provenance is code-assigned)", async () => {
+  await withTempDb(async (db) => {
+    resolveThread(db, "tkt_plain", "m1", 1000);
+    assertEquals(playbookProvenanceFor([]), null);
+
+    const overeager = () =>
+      Promise.resolve({ episode: "Webhooks timed out; batch size raised.", playbook: "Symptom: x -> Fix: y" });
+    const result = await summarizeOnce(db, overeager, {
+      now: 100_000,
+      summarizeAfterMs: 50_000,
+      activeCap: 100,
+    });
+    assertEquals(result.summarized.length, 1);
+    assertEquals(result.summarized[0].playbookId, null);
+    assertEquals(result.summarized[0].playbookProvenance, null);
+    const memories = listActiveMemories(db, "google", 100_001);
+    assertEquals(memories.map((m) => m.kind), ["episode"]);
   });
 });

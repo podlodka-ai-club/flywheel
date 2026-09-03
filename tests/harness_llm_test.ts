@@ -385,6 +385,34 @@ Deno.test("hydrateThreadHistory maps roles and preserves order/timestamps", () =
   );
 });
 
+Deno.test("internal team notes never reach a live run: not hydrated, absent from the model context", async () => {
+  const note = {
+    ...record("n1", "system", "SENTINEL-ZEBRA-7: internal hypothesis, do not repeat", 1500),
+    metadata: { type: "internal_note", channel: "dev-ui", author: { id: "ana", name: "Ana Petrova" } },
+  };
+  const history = [
+    record("c1", "customer", "The TV shows stale content", 1000),
+    note,
+    record("a1", "assistant", "Let me check.", 2000),
+  ];
+  assertEquals(hydrateThreadHistory(history).length, 2);
+
+  const { faux, harness } = makeHarness();
+  let seen: Context | undefined;
+  faux.setResponses([(context) => {
+    seen = context;
+    return fauxAssistantMessage("Please republish the channel list.");
+  }]);
+  await harness.run({
+    threadId: "tkt_1",
+    customerId: "cust_7",
+    message: record("c2", "customer", "still stale", 3000),
+    history,
+  });
+  assert(seen !== undefined);
+  assert(!JSON.stringify(seen).includes("SENTINEL-ZEBRA-7"), "team note leaked into the model context");
+});
+
 Deno.test("human escalation responses are marked internal and produce continuation metadata", async () => {
   const { faux, harness } = makeHarness();
   let seen: Context | undefined;

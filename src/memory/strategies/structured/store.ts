@@ -11,7 +11,8 @@ export type MemoryProvenance =
   | "customer_stated"
   | "agent_inferred"
   | "ticket_summary"
-  | "human_resolution";
+  | "human_resolution"
+  | "team_discussion";
 
 export interface MemoryRecord {
   id: string;
@@ -200,6 +201,8 @@ function label(memory: MemoryRecord): string {
       return `[claimed by customer, ${date} — unverified]`;
     case "human_resolution":
       return `[playbook from human resolution, ${date}]`;
+    case "team_discussion":
+      return `[playbook from team discussion, ${date}]`;
     case "ticket_summary":
       return `[past ticket${memory.sourceThreadId ? ` ${memory.sourceThreadId}` : ""}, ${date}]`;
     default:

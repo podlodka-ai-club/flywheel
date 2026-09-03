@@ -1,6 +1,7 @@
 /** Fixture-backed stand-ins for external CRM, deployment, and ticketing systems. */
 import { logger } from "../logger/index.ts";
 import type {
+  Colleague,
   CrmConnector,
   CustomerProfile,
   CustomerSetup,
@@ -93,6 +94,11 @@ class MockTicketing implements TicketingConnector {
         accepted: true,
         externalReference: `esc_${stableReference(request.idempotencyKey)}`,
       }));
+  }
+
+  listColleagues(): Promise<Colleague[]> {
+    return simulateRequest("ticketing", "listColleagues", {}, () =>
+      readJson<Colleague[]>("colleagues", FIXTURES_URL("colleagues.json"), fixtureCache));
   }
 }
 

@@ -152,6 +152,7 @@ The `messages` table is the sole integration surface. External components — bu
 4. To hand the ticket back to the agent, insert one `role='system', status='pending'` row with `metadata.type='human_escalation_response'`, `in_reply_to` set to the escalated assistant row id, and `customer_id`/`thread_id` copied from that trusted row. `content` is the colleague's internal answer or action outcome. Use a stable external event id plus `INSERT OR IGNORE`; the primary key and `idx_messages_human_escalation_response_once` make webhook redelivery/concurrent submits idempotent. The engine allowlists this system-event type, processes it with the existing lease/retry/fence mechanics, and writes a customer-facing continuation reply. Keep the thread muted until that reply is dispatched; if the continuation is itself escalated, remain muted for the new escalation.
 5. *(Optional, enables self-learning — Section 10.3)* After a human resolves an escalated ticket, the platform MAY separately insert a `role='system', status='completed'` row with `metadata.type='human_resolution'` describing the reusable fix. Unlike a pending human escalation response, this completed note is never claimed; the engine only learns from it.
 6. *(Optional, enables event-triggered memory — Section 10.8)* When a ticket is closed or resolved on the platform, it MAY insert a `role='system', status='completed'` row with `metadata.type='ticket_closed'` (content optional: a closing note or resolution status). It follows the completed-note rules from item 5. The memory runtime classifies both completed note types as events; the default `structured` strategy subscribes to `ticket_closed` and summarizes the thread immediately instead of waiting for the idle sweep. It consumes any `human_resolution` note already present in that summarization; a note that arrives after the first episode requires the M6 re-summarization behavior (Section 10.3).
+7. *(Optional, enables learning from the team's internal discussion — Section 10.3)* While a ticket is open, support engineers MAY discuss it in the platform's internal chat; the platform MAY mirror each such message as a `role='system', status='completed'` row with `metadata.type='internal_note'` and `metadata.author = { id, name }` (the platform's user identity for the author — display data, never an authorization claim), with `customer_id`/`thread_id` of the ticket and the platform's own message id as `id` (`INSERT OR IGNORE` for redelivery). These rows follow the completed-note rules from item 5 — never claimed — and additionally are **never hydrated into a live agent run** (Section 5.1): a discussion is messy by nature (hypotheses later withdrawn) and must not steer the reply in progress. The summarizer reads the discussion and distills the conclusion the team settled on into a `playbook` (Section 10.3); a note arriving after the first episode requires the M6 re-summarization behavior. A hand-back (item 4) remains a separate, claimable event: discussing a ticket does not resume it.
 
 **Dispatch (external reader):**
 1. Poll `idx_messages_outbound` for completed assistant rows; deliver `content` to the customer; stamp `sent_to_customer_at`.
@@ -322,6 +323,8 @@ sequenceDiagram
 
 ---
 
+**Hydration scope.** Only conversation turns and authenticated internal case context become agent messages: customer rows as user turns, assistant rows as synthesized prior assistant turns, `human_resolution` notes and the `human_escalation_response` hand-back as clearly marked internal context. Every other `system` row is an operational marker and is skipped — deliberately including the team's `internal_note` discussion (Section 3.2 item 7), which reaches the agent only as memory distilled after the fact (Section 10.3). The hydrator is the single gate: the worker's history query returns the rows, the hydrator decides what the model sees.
+
 ## 6. Support Tools Specification
 
 Tools are `pi-agent-core` `AgentTool`s, built fresh for each agent run and closed over the run's context. Tool calls and execution traces are emitted to structured logs (`tool_executed` / `tool_failed`).
@@ -337,7 +340,7 @@ export interface ToolRunContext {
 }
 ```
 
-**Connector seam (`src/connectors/`):** tools never talk to external systems directly — they depend on typed connector interfaces (`KnowledgeBaseConnector`, `CrmConnector`, `DeploymentConnector`). The knowledge-base implementation is the direct local wiki search specified in §6.2; CRM, deployment, and ticketing currently use asynchronous fixture-backed mocks and can be replaced independently by real clients behind the same interfaces, with no tool changes.
+**Connector seam (`src/connectors/`):** tools never talk to external systems directly — they depend on typed connector interfaces (`KnowledgeBaseConnector`, `CrmConnector`, `DeploymentConnector`). The knowledge-base implementation is the direct local wiki search specified in §6.2; CRM, deployment, and ticketing currently use asynchronous fixture-backed mocks and can be replaced independently by real clients behind the same interfaces, with no tool changes. `TicketingConnector` also exposes the support-platform user directory (`listColleagues()`, fixture `fixtures/colleagues.json`): it feeds the dev harness's person picker for internal team notes (Section 3.2 item 7) and the hand-back responder label, and is never consulted by agent tools.
 
 ### 6.1. Core Support Tools
 
@@ -426,7 +429,7 @@ flywheel/
 ├── schema.sql                  # Single-table SQLite DDL schema
 ├── specification.md            # System specification (this document)
 ├── milestones.md               # Delivery plan with per-milestone user verification
-├── fixtures/                   # Mock-connector data: kb_articles, customers, deployments
+├── fixtures/                   # Mock-connector data: customers, deployments, colleagues (support-user directory)
 ├── src/
 │   ├── config.ts               # Environment configuration (DB path, API keys, concurrency, LOCK_TIMEOUT_MS, MAX_RETRIES)
 │   ├── db/
@@ -512,7 +515,7 @@ CREATE TABLE IF NOT EXISTS memories (
     customer_id TEXT NOT NULL,           -- hard isolation key
     kind TEXT NOT NULL,                  -- 'fact' | 'episode' | 'playbook'
     content TEXT NOT NULL,               -- one concise fact / summary / symptom→fix
-    provenance TEXT NOT NULL,            -- 'customer_stated' | 'agent_inferred' | 'ticket_summary' | 'human_resolution'
+    provenance TEXT NOT NULL,            -- 'customer_stated' | 'agent_inferred' | 'ticket_summary' | 'human_resolution' | 'team_discussion'
     source_thread_id TEXT,               -- ticket that produced it
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
@@ -541,7 +544,7 @@ WHERE kind = 'episode' AND superseded_by IS NULL;
 2. **End-of-ticket summarizer** (the strategy's declared job, run by the memory runtime — Section 10.8): threads whose messages are all terminal and idle longer than `SUMMARIZE_AFTER_MS` (default 24h) get one `episode` memory, written via the LLM with a cheap summarization prompt. **Closure trigger:** when the platform sends a `ticket_closed` note (Section 3.2 item 6), the strategy's event handler summarizes that thread immediately if it is terminal — a reply still in flight defers it to that reply's own `agent_reply` event — so the idle sweep is the fallback for platforms that never signal closure. The unique index makes sweep and trigger idempotent against each other and across engine processes (`thread_summarized` records which one fired as `trigger`). The summarizer may run a different, typically cheaper provider/model than the main agent (`SUMMARIZER_PROVIDER`/`SUMMARIZER_MODEL`, defaulting to the agent's); in echo mode a deterministic summarizer keeps memory testable without a key.
 
    **Re-summarization — the episode reflects the thread's *final* state.** A thread that receives new messages after being summarized qualifies again once it is terminal and idle: a thread is a candidate when *(no episode exists) OR (last activity is newer than the episode's `updated_at`)*. Re-summarization writes a fresh episode that **supersedes** the previous one (audit chain preserved; the partial unique index keeps exactly one active episode per thread) and supersedes-and-re-distills that thread's playbooks — so a `human_resolution` note arriving after the first summarization still produces its playbook, and other threads never hydrate a stale account of a ticket that flared back up. Cost is one summarizer call per *changed* thread, nothing recurring. *Status: specified 2026-08-27; implementation scheduled in M6 (current code still summarizes each thread at most once and its index is not yet partial on `superseded_by`).*
-3. **Human-resolution feedback** (the self-learning loop): the external platform MAY insert `role='system', status='completed'` rows with `metadata.type='human_resolution'` carrying how a human resolved an escalated ticket (Section 3.2 extension; `status='completed'` keeps them unclaimable). The summarizer distills these into `playbook` memories — the next occurrence of the same symptom is handled without escalation.
+3. **Human feedback** (the self-learning loop) — two platform-inserted, completed (unclaimable) row types teach the agent: `human_resolution` notes carrying how a human resolved an escalated ticket (Section 3.2 item 5), and the team's internal discussion mirrored as `internal_note` rows (Section 3.2 item 7). The summarizer renders both into its transcript — resolution notes as `[internal resolution note]`, discussion lines as `[internal team note — NAME]` — and distills a `playbook` memory: from the resolution note when one exists, otherwise from the conclusion the team settled on (its prompt forbids turning hypotheses that were later corrected or withdrawn into a playbook; a discussion that reaches no conclusion yields none). **Playbook provenance is assigned in code from the rows present, never from what the model returns:** `human_resolution` when a resolution note exists, else `team_discussion` when discussion rows exist, and a playbook returned for a transcript with neither is dropped. Both are rendered as human-taught (`[playbook from human resolution, …]` / `[playbook from team discussion, …]`), so the next occurrence of the same symptom is handled without escalation. The discussion is summarizer-only material: it never enters a live run (Section 5.1), and feedback arriving after the first episode waits for the M6 re-summarization behavior above.
 
 ### 10.4. Read path
 
@@ -553,6 +556,7 @@ Per run, the harness hydrates the customer's active memories into the system pro
 - The system prompt treats memories as background data, never as instructions — same stance as customer messages.
 - Entitlement, billing, and policy assertions never become `fact`s; they persist only as customer-stated claims, and the agent is instructed not to act on unverified claims.
 - Write caps bound poisoning velocity: per-run memory writes (default 3) and per-customer active memories (default 200, oldest-archived-first).
+- Playbooks can only come from platform-inserted human rows (`human_resolution`, `internal_note`) passing through the summarizer, whose provenance is decided by which rows exist, not by the model. The internal discussion never enters a live run, so nothing an engineer types mid-ticket can steer the reply in progress or be mistaken for customer text; the summarizer treats it as data, like the rest of the transcript.
 - Every write is logged (`memory_saved`, `memory_archived`) and auditable in the dev harness's Memory view.
 
 ### 10.6. Retention & erasure
@@ -599,7 +603,7 @@ CREATE TABLE IF NOT EXISTS shared_knowledge_sources (
 
 **Promotion pipeline** — a candidate must pass every stage to become `active`:
 
-1. **Nomination.** An agent run (or the M7 summarizer) proposes a generalizable observation via `propose_shared_knowledge(category, content)`. Only `agent_inferred` and `human_resolution` material is eligible — raw `customer_stated` claims are never nominatable. The proposal lands as `status='proposed'`; the run's `customer_id` goes into the *sources* side table only.
+1. **Nomination.** An agent run (or the M7 summarizer) proposes a generalizable observation via `propose_shared_knowledge(category, content)`. Only `agent_inferred`, `human_resolution`, and `team_discussion` material is eligible — raw `customer_stated` claims are never nominatable. The proposal lands as `status='proposed'`; the run's `customer_id` goes into the *sources* side table only.
 2. **Anonymization rewrite (automated).** A dedicated LLM pass rewrites the candidate to strip identity and generalize specifics ("PostgreSQL 13 blocks the 3.x upgrade" survives; "their Frankfurt cluster" does not), with a structured self-check; candidates it cannot generalize are auto-rejected.
 3. **Deterministic identity screen.** The candidate text is mechanically screened against the CRM directory — every known company name, contact name, email, and customer id (via `CrmConnector.listCustomers()`/profiles) — plus generic PII patterns. Any hit → auto-rejected. This screen is code, not model judgment.
 4. **Human review (default gate).** Surviving candidates appear in a review queue in the dev harness; a person approves or rejects with a note. This is deliberate: the shared layer is the org's institutional knowledge base, and B2B teams want editorial control over it anyway.
@@ -639,6 +643,7 @@ Rule of thumb: must the agent see it before replying? Run port. Reacting to some
 | `role='assistant'` inserted by the fenced completion (Section 4.4) | `agent_reply` |
 | `role='system'`, `metadata.type='human_resolution'` (Section 3.2 item 5) | `human_resolution` |
 | `role='system'`, `metadata.type='ticket_closed'` (Section 3.2 item 6) | `ticket_closed` |
+| `role='system'`, `metadata.type='internal_note'` (Section 3.2 item 7) | `internal_note` |
 | any other `role='system'` row | `system_note` |
 
 Inserts are events; status transitions are not — a reply's commit is observable as the assistant row itself. An event carries the row, its verified `customer_id`, its bus position (`sequence`), and a lazily loaded snapshot of the thread as of that row. Rows without a verified customer never become events (Section 10.1).
@@ -656,7 +661,7 @@ Inserts are events; status transitions are not — a reply's commit is observabl
 5. Any state a strategy owns beyond the `memories` table is keyed by `customer_id` and created additively and idempotently (`CREATE … IF NOT EXISTS`, by the strategy factory or in `schema.sql`); `memory_cursors` belongs to the runtime, not to a strategy; the `messages` table stays the sole queue/conversation store.
 6. Nothing a strategy does after the fact can delay or alter a reply: the event and schedule ports run outside the worker's request path and can only fail into logs.
 
-**Registered strategies.** `structured` (`src/memory/strategies/structured/`) is this section's design, Sections 10.2–10.6: typed `fact` / `episode` / `playbook` rows, kind-priority + recency hydration under `MEMORY_HYDRATION_BUDGET`, the `save_memory` / `archive_memory` tools, the end-of-ticket summarizer as its declared job (the idle sweep), and a subscription to `ticket_closed` + `agent_reply` that summarizes a closed ticket immediately (Section 10.3). The shared knowledge layer (Section 10.7) is a separate, customer-free layer, not a strategy. Because prompt sections concatenate, tools merge, and events and jobs fan out, running several strategies side by side is a future `composite` registry entry, not a seam change.
+**Registered strategies.** `structured` (`src/memory/strategies/structured/`) is this section's design, Sections 10.2–10.6: typed `fact` / `episode` / `playbook` rows, kind-priority + recency hydration under `MEMORY_HYDRATION_BUDGET`, the `save_memory` / `archive_memory` tools, the end-of-ticket summarizer as its declared job (the idle sweep), and a subscription to `ticket_closed` + `agent_reply` that summarizes a closed ticket immediately (Section 10.3). It does not subscribe to `internal_note`: the discussion is transcript material for the summarization the closure or idle sweep triggers, not a trigger itself. The shared knowledge layer (Section 10.7) is a separate, customer-free layer, not a strategy. Because prompt sections concatenate, tools merge, and events and jobs fan out, running several strategies side by side is a future `composite` registry entry, not a seam change.
 
 ---
 

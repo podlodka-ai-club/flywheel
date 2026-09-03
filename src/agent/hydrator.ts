@@ -56,6 +56,10 @@ export function hydrateThreadHistory(records: MessageRecord[]): AgentMessage[] {
       });
     }
     // Other 'system' rows are operational markers, not conversation turns.
+    // That deliberately includes internal_note rows (the support team's
+    // internal discussion, spec §3.2 item 7): they reach the agent only as
+    // memory distilled by the summarizer. The worker's completed-history
+    // query does return them, so this branch is the only gate.
   }
   return messages;
 }

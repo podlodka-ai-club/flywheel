@@ -90,15 +90,18 @@ export interface MemoryRun {
  * What a row landing on the messages bus means. The runtime classifies every
  * insert: customer rows, assistant rows (a run's reply — visible only once
  * its fenced completion committed), and platform-inserted system rows by
- * their metadata.type (spec §3.2 items 4–6); any other system row is a
- * `system_note`. Status transitions are not events: the reply's commit is
- * observable as the assistant row itself.
+ * their metadata.type (spec §3.2 items 4–7: human_resolution, ticket_closed,
+ * and internal_note — a support engineer's message in the ticket's internal
+ * team discussion); any other system row is a `system_note`. Status
+ * transitions are not events: the reply's commit is observable as the
+ * assistant row itself.
  */
 export type MemoryEventType =
   | "customer_message"
   | "agent_reply"
   | "human_resolution"
   | "ticket_closed"
+  | "internal_note"
   | "system_note";
 
 export interface MemoryEvent {

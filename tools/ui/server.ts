@@ -8,6 +8,7 @@ import { config } from "../../src/config.ts";
 import { configureLogging, logger } from "../../src/logger/index.ts";
 import { openDb } from "../../src/db/client.ts";
 import { createConnectors } from "../../src/connectors/index.ts";
+import type { Colleague } from "../../src/connectors/types.ts";
 import {
   acknowledgeFailed,
   deleteThread,
@@ -34,6 +35,18 @@ const connectors = createConnectors();
 // summarizes — and the audit stays available with MEMORY_ENABLED=0.
 const memory = createMemoryStrategy(config.memoryStrategy, { db, config }).audit;
 const INDEX_HTML_URL = new URL("./index.html", import.meta.url);
+
+// Support-user directory (the people behind team notes and hand-backs), read
+// once through the ticketing connector: a mock round-trip per note would only
+// add jitter and connector_request noise to the logs.
+let colleaguesPromise: Promise<Colleague[]> | null = null;
+function loadColleagues(): Promise<Colleague[]> {
+  colleaguesPromise ??= connectors.ticketing.listColleagues().catch((err) => {
+    colleaguesPromise = null;
+    throw err;
+  });
+  return colleaguesPromise;
+}
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -94,7 +107,7 @@ const TABLE_ENUMS: Record<string, Record<string, string[]>> = {
   },
   memories: {
     kind: ["fact", "episode", "playbook"],
-    provenance: ["customer_stated", "agent_inferred", "ticket_summary", "human_resolution"],
+    provenance: ["customer_stated", "agent_inferred", "ticket_summary", "human_resolution", "team_discussion"],
   },
 };
 
@@ -500,6 +513,10 @@ async function handler(req: Request): Promise<Response> {
     const customers = await connectors.crm.listCustomers();
     return json(customers.map((c) => ({ id: c.customerId, company: c.company, plan: c.plan })));
   }
+  if (req.method === "GET" && pathname === "/api/colleagues") {
+    // Person picker for the team chat pane and the escalation inbox responder.
+    return json(await loadColleagues());
+  }
   const failedAckMatch = pathname.match(/^\/api\/messages\/([^/]+)\/failed_ack$/);
   if (req.method === "POST" && failedAckMatch) {
     const id = decodeURIComponent(failedAckMatch[1]);
@@ -601,11 +618,46 @@ async function handler(req: Request): Promise<Response> {
     }
     return json({ archived });
   }
+  // Internal team chat (spec §3.2 item 7): a support engineer's note on the
+  // ticket, written on behalf of a directory person. Completed → unclaimable,
+  // never hydrated into a live run; the summarizer distills the discussion.
+  const internalNote = pathname.match(/^\/api\/threads\/([^/]+)\/internal_note$/);
+  if (req.method === "POST" && internalNote) {
+    const threadId = decodeURIComponent(internalNote[1]);
+    const body = await req.json().catch(() => ({}));
+    const content = typeof body.content === "string" ? body.content.trim() : "";
+    const authorId = typeof body.authorId === "string" ? body.authorId.trim() : "";
+    if (content === "") return json({ error: "content required" }, 400);
+    if (content.length > 20_000) return json({ error: "content must be at most 20000 characters" }, 400);
+    const author = (await loadColleagues()).find((c) => c.id === authorId);
+    if (author === undefined) return json({ error: "authorId must name a directory colleague" }, 400);
+    const thread = getThreadMessages(db, threadId);
+    if (thread.length === 0) return json({ error: "thread not found" }, 404);
+    const customerId = thread.find((m) => m.customerId !== null)?.customerId ?? null;
+    const row = insertSystemMessage(db, {
+      threadId,
+      content,
+      customerId,
+      metadata: {
+        type: "internal_note",
+        channel: "dev-ui",
+        author: { id: author.id, name: author.name },
+      },
+    });
+    logger.info("dev_ui_internal_note_inserted", {
+      threadId,
+      messageId: row.id,
+      customerId,
+      authorId: author.id,
+    });
+    return json({ id: row.id });
+  }
+
   // Platform-inserted completed notes (spec §3.2 items 5–6), simulated from the thread
   // header: a human resolution or the ticket being closed. status='completed'
   // rows are unclaimable; the runtime classifies both, while the structured
   // strategy reacts immediately to ticket_closed and reads resolution notes
-  // through the summarizer transcript.
+  // (and the team discussion above) through the summarizer transcript.
   const platformNote = pathname.match(/^\/api\/threads\/([^/]+)\/(human_resolution|ticket_closed)$/);
   if (req.method === "POST" && platformNote) {
     const threadId = decodeURIComponent(platformNote[1]);

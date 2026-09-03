@@ -4,8 +4,9 @@
  * wrap it in prose, and throwing on JSON-free output so the summarizer sweep
  * retries the thread later.
  */
-import { assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
+import type { Context } from "@earendil-works/pi-ai";
 import { createLlmThreadSummarizer } from "../src/memory/strategies/structured/summarize_llm.ts";
 import type { MessageRecord } from "../src/db/messages.ts";
 
@@ -79,6 +80,42 @@ Deno.test("llm summarizer tolerates prose around the JSON object", async () => {
   const summary = await summarize(input);
   assertEquals(summary.episode, "Issue resolved.");
   assertEquals(summary.playbook, "Symptom: export fails -> Fix: re-enable exporter");
+});
+
+Deno.test("llm summarizer marks team notes per author and instructs the model on discussion-derived playbooks", async () => {
+  const { faux, summarize } = makeSummarizer();
+  let seen: Context | undefined;
+  faux.setResponses([(context) => {
+    seen = context;
+    return fauxAssistantMessage('{"episode": "Export failed; exporter re-enabled.", "playbook": null}');
+  }]);
+
+  await summarize({
+    ...input,
+    messages: [
+      ...input.messages,
+      {
+        ...record("n1", "system", "Maybe the exporter license expired?", 3000),
+        metadata: { type: "internal_note", channel: "dev-ui", author: { id: "ana", name: "Ana Petrova" } },
+      },
+      {
+        ...record("n2", "system", "No — the exporter was disabled; re-enable it.", 4000),
+        metadata: { type: "internal_note", author: { id: "ben" } }, // no name: falls back
+      },
+      {
+        ...record("hr", "system", "Re-enabled the exporter.", 5000),
+        metadata: { type: "human_resolution" },
+      },
+    ],
+  });
+  assert(seen !== undefined);
+  const transcript = JSON.stringify(seen.messages);
+  assertStringIncludes(transcript, "[internal team note — Ana Petrova] Maybe the exporter license expired?");
+  assertStringIncludes(transcript, "[internal team note — colleague] No — the exporter was disabled");
+  assertStringIncludes(transcript, "[internal resolution note] Re-enabled the exporter.");
+  assert(!transcript.includes("[system]"), "note rows must not render as bare system lines");
+  assertStringIncludes(seen.systemPrompt ?? "", "internal team note");
+  assertStringIncludes(seen.systemPrompt ?? "", "withdrawn");
 });
 
 Deno.test("llm summarizer throws on a response with no JSON so the sweep retries", async () => {

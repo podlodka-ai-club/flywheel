@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS memories (
     customer_id TEXT NOT NULL,           -- hard isolation key
     kind TEXT NOT NULL,                  -- 'fact' | 'episode' | 'playbook'
     content TEXT NOT NULL,               -- one concise fact / summary / symptom→fix
-    provenance TEXT NOT NULL,            -- 'customer_stated' | 'agent_inferred' | 'ticket_summary' | 'human_resolution'
+    provenance TEXT NOT NULL,            -- 'customer_stated' | 'agent_inferred' | 'ticket_summary' | 'human_resolution' | 'team_discussion'
     source_thread_id TEXT,               -- ticket that produced it
     created_at INTEGER NOT NULL,         -- Unix ms
     updated_at INTEGER NOT NULL,         -- Unix ms

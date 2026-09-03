@@ -116,6 +116,7 @@ Deno.test("escalate_to_human surfaces a rejected ticketing call as a tool error"
     ...context.connectors,
     ticketing: {
       escalateTicket: () => Promise.resolve({ accepted: false, externalReference: "" }),
+      listColleagues: () => Promise.resolve([]),
     },
   };
   await assertRejects(
@@ -130,4 +131,14 @@ Deno.test("escalate_to_human surfaces a rejected ticketing call as a tool error"
     "did not accept",
   );
   assertEquals(context.escalation.escalated, false);
+});
+
+Deno.test("ticketing connector exposes the support-user directory behind the team chat person picker", async () => {
+  const colleagues = await createConnectors().ticketing.listColleagues();
+  assert(colleagues.length >= 3);
+  const ids = colleagues.map((c) => c.id);
+  assertEquals(new Set(ids).size, ids.length, "colleague ids must be unique");
+  for (const c of colleagues) {
+    assert(c.id.trim() !== "" && c.name.trim() !== "", "id and name are required");
+  }
 });

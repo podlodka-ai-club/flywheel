@@ -13,7 +13,7 @@ import {
 } from "../../../agent/harness.ts";
 import { logger } from "../../../logger/index.ts";
 import type { MessageRecord } from "../../../db/messages.ts";
-import type { ThreadSummarizeFn, ThreadSummary } from "./summarizer.ts";
+import { internalNoteAuthor, type ThreadSummarizeFn, type ThreadSummary } from "./summarizer.ts";
 
 const SYSTEM_PROMPT =
   `You summarize closed B2B support tickets into memory for future tickets of the SAME customer.
@@ -25,7 +25,7 @@ Return ONLY a JSON object:
   "playbook": "Symptom: ... -> Fix: ..." or null
 }
 
-"playbook" MUST be null unless the transcript contains an internal human-resolution note (marked [internal resolution note]); when present, distill it into a reusable symptom->fix instruction.`;
+"playbook" MUST be null unless the transcript contains an internal human-resolution note (marked [internal resolution note]) or an internal team discussion (lines marked [internal team note — NAME]) that reaches a conclusion. Distill only what the team finally settled on into a reusable symptom->fix instruction; hypotheses that were later corrected or withdrawn in the discussion must never become the playbook. When a resolution note is present it takes precedence over the discussion. If the discussion reaches no conclusion, "playbook" is null.`;
 
 /**
  * Models intermittently fence (```json … ```) or preface the JSON despite the
@@ -43,6 +43,9 @@ function renderTranscript(messages: MessageRecord[]): string {
     const type = (m.metadata as { type?: string } | null)?.type;
     if (m.role === "system" && type === "human_resolution") {
       return `[internal resolution note] ${m.content}`;
+    }
+    if (m.role === "system" && type === "internal_note") {
+      return `[internal team note — ${internalNoteAuthor(m)}] ${m.content}`;
     }
     return `[${m.role}] ${m.content}`;
   }).join("\n");
@@ -99,6 +102,15 @@ export function createLlmThreadSummarizer(
       }
       break;
     }
+    logger.debug("summarizer_completed", {
+      threadId: input.threadId,
+      customerId: input.customerId,
+      provider: setup.provider,
+      modelId: setup.modelId,
+      tokensIn: response.usage.input,
+      tokensOut: response.usage.output,
+      costUsd: response.usage.cost.total,
+    });
     const text = response.content
       .filter((block): block is Extract<typeof block, { type: "text" }> => block.type === "text")
       .map((block) => block.text)

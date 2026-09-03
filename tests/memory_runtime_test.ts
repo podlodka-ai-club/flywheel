@@ -129,8 +129,55 @@ Deno.test("classifyMessage maps rows to the event table", () => {
   assertEquals(classifyMessage({ ...base, id: "2", role: "assistant", metadata: { escalated: true } }), "agent_reply");
   assertEquals(classifyMessage({ ...base, id: "3", role: "system", metadata: { type: "human_resolution" } }), "human_resolution");
   assertEquals(classifyMessage({ ...base, id: "4", role: "system", metadata: { type: "ticket_closed" } }), "ticket_closed");
+  assertEquals(classifyMessage({ ...base, id: "4b", role: "system", metadata: { type: "internal_note", author: { id: "ana", name: "Ana Petrova" } } }), "internal_note");
   assertEquals(classifyMessage({ ...base, id: "5", role: "system", metadata: { type: "something_else" } }), "system_note");
   assertEquals(classifyMessage({ ...base, id: "6", role: "system", metadata: null }), "system_note");
+});
+
+Deno.test("bus tail: internal team notes reach a subscribed strategy with their author; unverified threads never do", async () => {
+  await withTempDb(async (db) => {
+    const seen: MemoryEvent[] = [];
+    const strategy = fakeStrategy({
+      name: "team",
+      events: {
+        types: ["internal_note"],
+        handle: (event) => {
+          seen.push(event);
+          return Promise.resolve();
+        },
+      },
+    });
+    const runtime = startMemoryRuntime(db, strategy, FAST);
+    let noteId = "";
+    try {
+      resolveThread(db, "t1", "m1", 1000); // customer + reply: not subscribed
+      noteId = insertSystemMessage(db, {
+        threadId: "t1",
+        content: "Looks like the batch size — bump it to 100",
+        customerId: "google",
+        metadata: { type: "internal_note", channel: "dev-ui", author: { id: "ben", name: "Ben Okoro" } },
+        createdAt: 1003,
+      }).id;
+      insertCustomerMessage(db, { id: "anon", threadId: "t_anon", content: "who am i", createdAt: 1004 });
+      insertSystemMessage(db, {
+        threadId: "t_anon",
+        content: "note on an unverified thread",
+        customerId: null,
+        metadata: { type: "internal_note", author: { id: "ana", name: "Ana Petrova" } },
+        createdAt: 1005,
+      });
+      await waitFor(() => seen.length === 1);
+      await sleep(30);
+    } finally {
+      await runtime.stop();
+    }
+    assertEquals(seen.length, 1);
+    assertEquals(seen[0].type, "internal_note");
+    assertEquals(seen[0].message.id, noteId);
+    assertEquals(seen[0].customerId, "google");
+    assertEquals((seen[0].message.metadata as { author: unknown }).author, { id: "ben", name: "Ben Okoro" });
+    assertEquals(seen[0].thread().map((m) => m.id), ["m1", "r_m1", noteId]);
+  });
 });
 
 Deno.test("cursor: a new strategy starts at the end of the bus; a restart resumes where it stopped; nothing is delivered twice", async () => {

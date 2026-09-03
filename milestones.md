@@ -1,6 +1,6 @@
 # Implementation Milestones
 
-Milestones M1–M8 (plus the M3.5 logging, M5.5 wiki-search, M5.6 durable-escalation, and M7.5/M7.6 memory-seam addenda), each ending in something runnable that you verify by hand before we continue. **Execution order: M1 → M5, then M7 (memory) with its M7.5 seam and M7.6 trigger/schedule addenda, M5.5 (real wiki search), M5.6 (durable human escalation), M6 (hardening), and M8 (shared knowledge)** — M6 and M7 are deliberately swapped so the hardening pass covers memory, real retrieval, and the complete human-in-the-loop lifecycle; the numbers stay stable as identifiers. Milestones 1–3 require **no LLM API key**: the engine runs with a deterministic echo agent so all queue mechanics can be exercised for free. The real agent arrives in Milestone 4.
+Milestones M1–M8 (plus the M3.5 logging, M5.5 wiki-search, M5.6 durable-escalation, M5.7 internal-team-chat, and M7.5/M7.6 memory-seam addenda), each ending in something runnable that you verify by hand before we continue. **Execution order: M1 → M5, then M7 (memory) with its M7.5 seam and M7.6 trigger/schedule addenda, M5.5 (real wiki search), M5.6 (durable human escalation), M5.7 (internal team chat), M6 (hardening), and M8 (shared knowledge)** — M6 and M7 are deliberately swapped so the hardening pass covers memory, real retrieval, and the complete human-in-the-loop lifecycle; the numbers stay stable as identifiers. Milestones 1–3 require **no LLM API key**: the engine runs with a deterministic echo agent so all queue mechanics can be exercised for free. The real agent arrives in Milestone 4.
 
 Testing happens through a **dev web harness** (`tools/ui/`) that simulates the external support platform — ingest and dispatcher — which is out of scope for the core per [specification.md](specification.md) §3.2. It is a separate Deno process from the engine, sharing the SQLite file just like a real co-located adapter would, so every test session also exercises the multi-process WAL contract. No frontend framework, no build step: one `Deno.serve` server with a thin JSON API over the data-access layer, serving a single static HTML page (vanilla JS, ~1s polling).
 
@@ -213,6 +213,31 @@ Your testing loop: `deno task start` (engine) in one terminal, `deno task dev:ui
 
 ---
 
+## M5.7 — Internal team chat (added on request)
+
+**Goal:** emulate the support team's internal discussion of a ticket — several engineers, hypotheses, corrections, the final fix — and let the agent learn from it. The dev harness gets a per-ticket **Team chat** pane where one operator writes as different people picked from a directory; the summarizer distills the discussion's conclusion into a playbook. The discussion never reaches a live run and never resumes a ticket: hand-back stays the Escalations inbox's separate, claimable event.
+
+**Build:**
+- Spec §3.2 item 7: `role='system', status='completed', metadata.type='internal_note', metadata.author={id,name}` rows on the `messages` ledger, inherited `customer_id`/`thread_id`; unclaimable by construction (the claim allowlist is untouched)
+- Support-user directory behind the connector seam: `TicketingConnector.listColleagues()` over `fixtures/colleagues.json`; harness `GET /api/colleagues`
+- Memory runtime classifies the rows as a new `internal_note` event type; the structured strategy does **not** subscribe (summarization still fires on `ticket_closed` / the idle sweep)
+- Summarizer: discussion lines rendered `[internal team note — NAME]`; prompt distills only the conclusion the team settled on, never withdrawn hypotheses, and a resolution note takes precedence; new provenance `team_discussion` with prompt label `[playbook from team discussion, DATE]`; **playbook provenance assigned in code from the rows present** (`human_resolution` > `team_discussion` > none — a model-returned playbook for a transcript with neither is dropped); the echo summarizer builds `When: … | Fix (team, NAME): <last note>` key-free
+- Hydrator keeps `internal_note` rows out of every run (pinned by a no-leak test)
+- Harness: `POST /api/threads/:id/internal_note {content, authorId}` (author validated against the directory, thread must exist, content ≤ 20 000 chars; `dev_ui_internal_note_inserted` content-free log); **Team chat** pane beside the transcript with a person select (remembered per browser), the open escalation request as read-only context linking to the inbox, and an "already summarized" banner for notes that will need M6 re-summarization; the transcript hides team notes and the sidebar snippet skips them; the Escalations inbox responder becomes the same person select (`metadata.responder` = colleague id, resolved to a name in the UI)
+
+**You verify:**
+1. Open a thread: the **💬 team chat** pane shows a person select loaded from the directory; write as Ana, then as Ben — bubbles carry author, title, and time; the customer transcript shows no team bubbles; the Database view shows `internal_note` rows with `status=completed` and `metadata.author`.
+2. Reload the page: the selected person and the pane's open/closed state persist.
+3. Send a customer message with notes present: the engine replies normally and, with the LLM agent, shows no awareness of the discussion (nothing from the notes is in the prompt).
+4. Trigger an escalation: the pane shows the open request with an "answer in Escalations" link; in **Escalations** the responder is the same person select; the hand-back row's `metadata.responder` is the colleague id and the transcript bubble shows the colleague's name.
+5. Discuss a ticket with a wrong hypothesis first and the real fix last, then click **✅ close ticket**: `thread_summarized` logs a `playbookId` with `playbookProvenance: "team_discussion"`; the Memory view shows the playbook; a new thread for the same customer hydrates it (`[playbook from team discussion, DATE]` in the `memory_hydrated` section / reflected in the LLM reply).
+6. Same in `AGENT_MODE=echo`: the playbook reads `When: … | Fix (team, Ben Okoro): <last note>`.
+7. Add a team note to an already-summarized thread: the pane shows the "already summarized" banner and no second episode appears.
+
+**Automated tests:** directory via the connector; `classifyMessage` + runtime delivery of `internal_note` events (unverified threads dropped); structured strategy not subscribed; prompt label for the new provenance; echo summarizer distilling the conclusion with `team_discussion` provenance, resolution-note precedence, and the provenance guard dropping note-less playbooks; LLM transcript marking + prompt rule via the faux provider; hydrator exclusion + no-leak e2e; full regression suite.
+
+---
+
 ## M7 — Per-customer memory & self-learning
 
 **Goal:** the agent accumulates knowledge per customer account — durable facts, ticket episodes, and playbooks learned from human resolutions — with hard isolation between customers and explicit poisoning resistance. Full design: spec §10. **Runs before M6** (order swapped by decision — memory numbers stay stable identifiers): building memory first means M6's hardening and end-to-end pass covers the memory subsystem too.
@@ -291,7 +316,7 @@ Your testing loop: `deno task start` (engine) in one terminal, `deno task dev:ui
 
 **Build:**
 - Graceful shutdown: on SIGINT/SIGTERM stop claiming, finish or release in-flight work, exit
-- **Memory re-summarization** (spec §10.3, specified during M7 review): threads with activity newer than their episode re-qualify once terminal+idle; fresh episode supersedes the old, playbooks superseded and re-distilled (late `human_resolution` notes finally yield their playbook); requires the episode unique index to become partial on `superseded_by IS NULL` (drop-and-recreate migration)
+- **Memory re-summarization** (spec §10.3, specified during M7 review): threads with activity newer than their episode re-qualify once terminal+idle; fresh episode supersedes the old, playbooks superseded and re-distilled (late `human_resolution` notes and `internal_note` discussions finally yield their playbook); requires the episode unique index to become partial on `superseded_by IS NULL` (drop-and-recreate migration)
 - Hourly `wal_checkpoint(TRUNCATE)` maintenance task (spec §9.2)
 - `deno task start` runs under the exact least-privilege permission set from spec §9.1 (the dev harness keeps its own dev-only permissions and is never deployed with the engine)
 - README run book: all tasks, env vars, the table contract for future adapter authors, and the harness guide
@@ -311,7 +336,7 @@ Your testing loop: `deno task start` (engine) in one terminal, `deno task dev:ui
 **Build:**
 - `shared_knowledge` table (**no customer identity column exists — by design**) + `shared_knowledge_sources` audit side table that no read path ever touches (spec §10.7 DDL)
 - `src/memory/shared.ts`: read path (active rows only) + promotion-pipeline state machine (`proposed → active | rejected`, supersede, archive)
-- **Nomination**: `propose_shared_knowledge(category, content)` tool + a summarizer hook — eligible material is `agent_inferred` / `human_resolution` only, never raw `customer_stated` claims; the proposing run's `customer_id` goes into the sources side table only
+- **Nomination**: `propose_shared_knowledge(category, content)` tool + a summarizer hook — eligible material is `agent_inferred` / `human_resolution` / `team_discussion` only, never raw `customer_stated` claims; the proposing run's `customer_id` goes into the sources side table only
 - **Anonymization pass**: an LLM rewrite that strips identity and generalizes specifics, with a structured self-check; ungeneralizable candidates auto-reject
 - **Deterministic identity screen** (code, not model judgment): candidate text screened against the full CRM directory — company names, contacts, emails, customer ids via `CrmConnector.listCustomers()`/profiles — plus generic PII patterns; any hit auto-rejects
 - **Human review queue** in the harness Memory view: approve/reject with note (`reviewed_by`); nothing becomes `active` without it (until `SHARED_KNOWLEDGE_MIN_SOURCES`-gated auto-promotion is deliberately enabled)

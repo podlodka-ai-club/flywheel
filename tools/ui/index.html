@@ -152,6 +152,65 @@
   #composer.muted textarea { opacity: .55; }
   label { color: var(--muted); font-size: 11px; display: block; margin-bottom: 3px; }
 
+  /* Internal team chat: a per-thread pane beside the customer transcript */
+  #chatBody { display: flex; flex: 1; min-height: 0; }
+  #customerPane { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  #teamPane {
+    width: 340px; flex: none; border-left: 1px solid var(--border); background: var(--panel);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  #teamPane[hidden] { display: none !important; }
+  .team-head { padding: 10px 14px 8px; border-bottom: 1px solid var(--border); }
+  .team-head strong { font-size: 13px; }
+  .team-head .hint { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .team-as { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); }
+  .team-as label { margin: 0; flex: none; }
+  .colleague-select {
+    flex: 1; background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 8px; font: inherit; font-size: 12px; min-width: 0;
+  }
+  .colleague-select:focus { outline: none; border-color: var(--accent); }
+  #teamContext { flex: none; }
+  .team-card {
+    margin: 10px 14px 0; padding: 8px 10px; border-radius: 8px; font-size: 12px;
+    border: 1px solid color-mix(in srgb, var(--pending) 45%, transparent);
+    background: color-mix(in srgb, var(--pending) 10%, transparent);
+  }
+  .team-card .tc-title { color: var(--pending); font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .team-card .tc-row { margin-top: 4px; overflow-wrap: anywhere; }
+  .team-card .tc-row b { color: var(--muted); font-weight: 600; }
+  .team-card button {
+    margin-top: 6px; border: 1px solid color-mix(in srgb, var(--pending) 55%, transparent);
+    background: transparent; color: var(--pending); border-radius: 6px; padding: 3px 10px;
+    cursor: pointer; font-size: 11px; font-weight: 650;
+  }
+  .team-card.info { border-color: var(--border); background: var(--panel-2); color: var(--muted); }
+  #teamNotes { flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .note { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; }
+  .note .avatar {
+    flex: none; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+    font-size: 10px; font-weight: 700; color: #fff; background: var(--processing); margin-top: 2px;
+  }
+  .note.mine .avatar { background: var(--completed); }
+  .note .n-body { flex: 1; min-width: 0; border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; background: var(--panel-2); border-left: 3px solid var(--processing); }
+  .note.mine .n-body { border-left-color: var(--completed); }
+  .note .n-head { display: flex; align-items: baseline; gap: 6px; margin-bottom: 2px; }
+  .note .n-name { font-size: 11px; font-weight: 700; }
+  .note .n-title { color: var(--muted); font-size: 10px; }
+  .note .n-time { margin-left: auto; color: var(--muted); font-size: 10px; }
+  .note .n-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
+  #teamComposer { border-top: 1px solid var(--border); padding: 10px 14px; display: flex; gap: 8px; flex: none; }
+  #teamContent {
+    flex: 1; resize: none; height: 56px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font: inherit;
+  }
+  #teamContent:focus { outline: none; border-color: var(--accent); }
+  #teamSend {
+    padding: 0 14px; border: none; border-radius: 8px; background: var(--accent);
+    color: #fff; font-weight: 650; cursor: pointer;
+  }
+  #teamSend:disabled { opacity: .5; cursor: default; }
+
   #viewToggle { display: flex; gap: 2px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 2px; margin-left: 12px; }
   #viewToggle button {
     border: none; background: transparent; color: var(--muted); padding: 4px 12px;
@@ -288,6 +347,7 @@
     border-radius: 6px; padding: 2px 10px; cursor: pointer; font-size: 11px; margin-left: auto;
   }
   .thread-logs-btn:hover { color: var(--text); border-color: var(--muted); }
+  .thread-logs-btn.active { color: var(--accent); border-color: var(--accent); }
 
   #dbBar { padding: 7px 16px; border-bottom: 1px solid var(--border); background: var(--panel); color: var(--muted); font-size: 11px; flex: none; }
   #dbFilters {
@@ -370,7 +430,10 @@
         <button type="button" id="threadResolution" class="thread-logs-btn" hidden title="Simulate the platform inserting a human resolution note (spec §3.2 item 5) — the summarizer distills it into a playbook memory">🤝 human resolution</button>
         <button type="button" id="threadClose" class="thread-logs-btn" hidden title="Simulate the platform closing this ticket (spec §3.2 item 6) — the memory strategy's event handler reacts right away (the structured strategy writes the episode without waiting for the idle sweep)">✅ close ticket</button>
         <button type="button" id="threadLogs" class="thread-logs-btn" hidden title="Open the Logs view filtered to this thread">🪵 logs for this thread</button>
+        <button type="button" id="threadTeam" class="thread-logs-btn" hidden title="Toggle the internal team chat for this ticket (spec §3.2 item 7) — support engineers discuss here; the summarizer distills the conclusion into a playbook, the live agent never sees it">💬 team chat</button>
       </div>
+      <div id="chatBody">
+      <div id="customerPane">
       <div id="messages"><div class="empty">Nothing here yet.</div></div>
       <form id="composer">
         <div class="row">
@@ -389,6 +452,24 @@
           <button id="send" type="submit">Send</button>
         </div>
       </form>
+      </div>
+      <section id="teamPane" hidden>
+        <div class="team-head">
+          <strong>💬 Team chat</strong>
+          <span class="hint">Internal discussion between support engineers — never shown to the customer or to the live agent; the summarizer learns from it at ticket close.</span>
+        </div>
+        <div class="team-as">
+          <label for="teamAuthor">writing as</label>
+          <select id="teamAuthor" class="colleague-select" title="Directory person the note is attributed to (metadata.author)"></select>
+        </div>
+        <div id="teamContext"></div>
+        <div id="teamNotes"></div>
+        <form id="teamComposer">
+          <textarea id="teamContent" placeholder="Discuss the ticket… (Enter to send, Shift+Enter for newline)"></textarea>
+          <button id="teamSend" type="submit">Send</button>
+        </form>
+      </section>
+      </div>
       </div>
 
       <div id="escalationsView" hidden>
@@ -480,6 +561,12 @@
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
+function readStored(key, fallback) {
+  try { return localStorage.getItem(key) ?? fallback; } catch (_err) { return fallback; }
+}
+function writeStored(key, value) {
+  try { localStorage.setItem(key, value); } catch (_err) { /* private mode etc. */ }
+}
 const state = {
   view: "chat",
   active: null,
@@ -507,6 +594,14 @@ const state = {
   lastFailedJson: "",
   escalations: [],
   lastEscalationsJson: "",
+  // Internal team chat: the directory, who the operator is "writing as"
+  // (shared with the escalation inbox responder), pane visibility, and
+  // whether the active thread already has an episode (late notes need M6).
+  colleagues: [],
+  colleague: readStored("flywheel.colleague", null),
+  teamPaneOpen: readStored("flywheel.teamPane", "open") !== "closed",
+  threadSummarized: false,
+  lastEpisodeJson: "",
   logs: { entries: [], lastJson: "", meta: "" },
   memory: { records: [], lastJson: "", customer: "" },
   config: { data: null, lastJson: "" },
@@ -631,6 +726,199 @@ function renderThreads() {
 function isHumanEscalationResponse(m) {
   return m.role === "system" && m.metadata && m.metadata.type === "human_escalation_response";
 }
+function isInternalNote(m) {
+  return m.role === "system" && m.metadata && m.metadata.type === "internal_note";
+}
+
+// ---- Internal team chat (spec §3.2 item 7) ----
+function colleagueById(id) {
+  return state.colleagues.find((c) => c.id === id) || null;
+}
+function colleagueName(id) {
+  const c = colleagueById(id);
+  return c ? c.name : id;
+}
+function setColleague(id) {
+  state.colleague = id;
+  writeStored("flywheel.colleague", id);
+  if ($("teamAuthor").value !== id) $("teamAuthor").value = id;
+}
+/** A person picker bound to state.colleague — one "acting as" choice across views. */
+function colleagueSelect() {
+  const select = document.createElement("select");
+  select.className = "colleague-select";
+  for (const c of state.colleagues) {
+    const option = document.createElement("option");
+    option.value = c.id;
+    option.textContent = c.name + " — " + c.title;
+    select.appendChild(option);
+  }
+  if (state.colleague) select.value = state.colleague;
+  select.onchange = () => setColleague(select.value);
+  return select;
+}
+function initials(name) {
+  return String(name || "?").split(/\s+/).map((w) => w[0]).filter(Boolean).slice(0, 2).join("").toUpperCase();
+}
+
+/** Escalations in the active thread still waiting for a colleague (same derivation as the composer mute). */
+function openEscalations() {
+  return state.messages.filter((m) =>
+    m.role === "assistant" && m.metadata && m.metadata.escalated &&
+    !state.messages.some((r) => isHumanEscalationResponse(r) && r.inReplyTo === m.id)
+  );
+}
+
+function syncTeamPane() {
+  const pane = $("teamPane");
+  const open = !!state.active && state.teamPaneOpen;
+  pane.hidden = !open;
+  $("threadTeam").classList.toggle("active", state.teamPaneOpen);
+  $("threadTeam").textContent = state.teamPaneOpen ? "💬 hide team chat" : "💬 team chat";
+}
+
+function renderTeamPane() {
+  syncTeamPane();
+  if ($("teamPane").hidden) return;
+
+  const context = $("teamContext");
+  context.textContent = "";
+  for (const esc of openEscalations()) {
+    const meta = esc.metadata || {};
+    const card = document.createElement("div");
+    card.className = "team-card";
+    const title = document.createElement("div");
+    title.className = "tc-title";
+    title.textContent = "⚠ the AI needs a colleague · " + (meta.escalation_reference || "no reference");
+    card.appendChild(title);
+    for (const [label, value] of [["reason", meta.escalation_reason], ["request", meta.escalation_request]]) {
+      const row = document.createElement("div");
+      row.className = "tc-row";
+      const b = document.createElement("b");
+      b.textContent = label + ": ";
+      row.append(b, document.createTextNode(value || "unspecified"));
+      card.appendChild(row);
+    }
+    const answer = document.createElement("button");
+    answer.type = "button";
+    answer.textContent = "answer in Escalations →";
+    answer.title = "Hand the ticket back to the AI from the Escalations inbox (a hand-back is a separate, claimable event — team notes are discussion only)";
+    answer.onclick = () => { setView("escalations"); refresh(); };
+    card.appendChild(answer);
+    context.appendChild(card);
+  }
+  if (state.threadSummarized) {
+    const card = document.createElement("div");
+    card.className = "team-card info";
+    card.textContent = "This ticket already has an episode memory — notes added now wait for M6 re-summarization before they can become a playbook.";
+    context.appendChild(card);
+  }
+
+  const list = $("teamNotes");
+  const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 60;
+  list.textContent = "";
+  const notes = state.messages.filter(isInternalNote);
+  if (notes.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "No team notes yet. Discuss the ticket as different colleagues — the summarizer distills the conclusion into a playbook when the ticket closes.";
+    list.appendChild(empty);
+  }
+  for (const m of notes) {
+    const author = (m.metadata && m.metadata.author) || {};
+    const el = document.createElement("div");
+    el.className = "note" + (author.id && author.id === state.colleague ? " mine" : "");
+    el.title = "Click for technical details";
+    el.onclick = () => {
+      state.expandedMessage = state.expandedMessage === m.id ? null : m.id;
+      renderTeamPane();
+    };
+    const avatar = document.createElement("div");
+    avatar.className = "avatar";
+    avatar.textContent = initials(author.name);
+    const body = document.createElement("div");
+    body.className = "n-body";
+    const head = document.createElement("div");
+    head.className = "n-head";
+    const name = document.createElement("span");
+    name.className = "n-name";
+    name.textContent = author.name || "colleague";
+    head.appendChild(name);
+    const directory = author.id ? colleagueById(author.id) : null;
+    if (directory) {
+      const title = document.createElement("span");
+      title.className = "n-title";
+      title.textContent = directory.title;
+      head.appendChild(title);
+    }
+    const time = document.createElement("span");
+    time.className = "n-time";
+    time.textContent = fmtTime(m.createdAt);
+    head.appendChild(time);
+    const text = document.createElement("div");
+    text.className = "n-text";
+    text.textContent = m.content;
+    body.append(head, text);
+    if (state.expandedMessage === m.id) {
+      const tech = document.createElement("div");
+      tech.className = "m-tech";
+      tech.onclick = (e) => e.stopPropagation();
+      tech.textContent = JSON.stringify({
+        id: m.id,
+        customer_id: m.customerId,
+        status: m.status,
+        created_at: new Date(m.createdAt).toISOString(),
+        metadata: m.metadata,
+      }, null, 2);
+      body.appendChild(tech);
+    }
+    el.append(avatar, body);
+    list.appendChild(el);
+  }
+  if (nearBottom) list.scrollTop = list.scrollHeight;
+}
+
+$("threadTeam").onclick = () => {
+  state.teamPaneOpen = !state.teamPaneOpen;
+  writeStored("flywheel.teamPane", state.teamPaneOpen ? "open" : "closed");
+  renderTeamPane();
+  if (state.teamPaneOpen) $("teamContent").focus();
+};
+
+$("teamAuthor").onchange = () => setColleague($("teamAuthor").value);
+
+$("teamComposer").onsubmit = async (e) => {
+  e.preventDefault();
+  if (!state.active) return toast("Select a thread first.", "warn");
+  const content = $("teamContent").value.trim();
+  if (!content) return;
+  if (!state.colleague) return toast("Pick who you are writing as first.", "warn");
+  if (state.messages.length === 0) {
+    return toast("Send a customer message first — team notes attach to an existing ticket.", "warn");
+  }
+  $("teamSend").disabled = true;
+  try {
+    await api("/api/threads/" + encodeURIComponent(state.active) + "/internal_note", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content, authorId: state.colleague }),
+    });
+    $("teamContent").value = "";
+    await refresh();
+  } catch (err) {
+    toast("Note failed: " + err.message, "warn");
+  } finally {
+    $("teamSend").disabled = false;
+    $("teamContent").focus();
+  }
+};
+
+$("teamContent").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    $("teamComposer").requestSubmit();
+  }
+});
 
 function threadIsHumanMuted() {
   for (const escalation of state.messages.filter((m) => m.role === "assistant" && m.metadata && m.metadata.escalated)) {
@@ -680,6 +968,9 @@ function renderMessages() {
   }
 
   for (const m of state.messages) {
+    // The transcript is what the platform shows on the ticket; the internal
+    // team discussion lives in the team chat pane, never inline here.
+    if (isInternalNote(m)) continue;
     const el = document.createElement("div");
     el.className = "msg " + m.role;
     if (isHumanEscalationResponse(m)) el.classList.add("human-response");
@@ -693,7 +984,9 @@ function renderMessages() {
     head.className = "m-head";
     const role = document.createElement("span");
     role.className = "m-role";
-    role.textContent = isHumanEscalationResponse(m) ? "human colleague" : m.role;
+    role.textContent = isHumanEscalationResponse(m)
+      ? "human colleague" + (m.metadata.responder ? " · " + colleagueName(m.metadata.responder) : "")
+      : m.role;
     head.appendChild(role);
     if (m.role === "system" && m.metadata && m.metadata.type) {
       // Platform note type (human_resolution, ticket_closed, …) — what the
@@ -911,10 +1204,8 @@ function renderEscalations() {
     responseBox.className = "esc-response";
     if (item.state === "awaiting_human") {
       const responderLabel = document.createElement("label");
-      responderLabel.textContent = "responder (audit label)";
-      const responder = document.createElement("input");
-      responder.placeholder = "e.g. maria@support";
-      responder.value = "dev-ui operator";
+      responderLabel.textContent = "responding as (metadata.responder — the directory colleague id)";
+      const responder = colleagueSelect();
       const answerLabel = document.createElement("label");
       answerLabel.style.marginTop = "8px";
       answerLabel.textContent = "internal answer or action outcome";
@@ -933,12 +1224,13 @@ function renderEscalations() {
       send.onclick = async () => {
         const content = answer.value.trim();
         if (!content) return toast("Write a response for the AI first", "warn");
+        if (!responder.value) return toast("Pick who is responding first", "warn");
         send.disabled = true;
         try {
           const result = await api("/api/escalations/" + encodeURIComponent(m.id) + "/respond", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ content, responder: responder.value.trim() }),
+            body: JSON.stringify({ content, responder: responder.value }),
           });
           toast(result.inserted ? "Human response queued for the AI ✓" : "Already answered elsewhere", "ok");
           state.lastEscalationsJson = "";
@@ -953,13 +1245,16 @@ function renderEscalations() {
     } else {
       const note = document.createElement("div");
       note.className = "esc-note";
+      const who = item.response?.metadata?.responder
+        ? "Human response (" + colleagueName(item.response.metadata.responder) + "): "
+        : "Human response: ";
       if (item.state === "failed") {
         note.textContent = "The AI continuation failed: " + (item.response?.error || "unknown error");
       } else if (item.state === "continued") {
-        note.textContent = "Human response: " + (item.response?.content || "") +
+        note.textContent = who + (item.response?.content || "") +
           "\nAI continuation: " + (item.continuation?.content || "completed");
       } else {
-        note.textContent = "Human response: " + (item.response?.content || "") +
+        note.textContent = who + (item.response?.content || "") +
           "\nThe workflow will continue automatically.";
       }
       const actions = document.createElement("div");
@@ -1747,7 +2042,11 @@ function clearActiveThread() {
   $("threadLogs").hidden = true;
   $("threadResolution").hidden = true;
   $("threadClose").hidden = true;
+  $("threadTeam").hidden = true;
+  state.threadSummarized = false;
+  state.lastEpisodeJson = "";
   renderMessages();
+  renderTeamPane();
 }
 
 async function removeThread(t) {
@@ -1779,8 +2078,12 @@ function selectThread(id) {
   $("threadLogs").hidden = false;
   $("threadResolution").hidden = false;
   $("threadClose").hidden = false;
+  $("threadTeam").hidden = false;
+  state.threadSummarized = false;
+  state.lastEpisodeJson = "";
   renderThreads();
   renderMessages();
+  renderTeamPane();
   refresh();
 }
 
@@ -1823,6 +2126,22 @@ async function refresh() {
         state.lastMessagesJson = messagesJson;
         state.messages = messages;
         renderMessages();
+        renderTeamPane();
+      }
+      // Team pane banner: has this ticket already been summarized? (Notes
+      // arriving after the episode wait for M6 re-summarization.)
+      const customerId = state.teamPaneOpen
+        ? (messages.find((m) => m.customerId !== null) || {}).customerId
+        : undefined;
+      if (customerId) {
+        const entries = await api("/api/memory?customer=" + encodeURIComponent(customerId));
+        const episode = entries.find((e) => e.kind === "episode" && e.sourceThreadId === state.active) || null;
+        const episodeJson = JSON.stringify(episode);
+        if (episodeJson !== state.lastEpisodeJson) {
+          state.lastEpisodeJson = episodeJson;
+          state.threadSummarized = episode !== null;
+          renderTeamPane();
+        }
       }
       // Dispatcher simulation: rendering a completed reply in the customer's
       // view "delivers" it — stamp sent_to_customer_at exactly once.
@@ -1930,6 +2249,23 @@ api("/api/customers").then((customers) => {
   // Default identity = first directory entry, unless the user already typed one.
   if (input.value.trim() === "" && customers.length > 0) input.value = customers[0].id;
 }).catch(() => { $("customerId").placeholder = "customer id (directory unavailable)"; });
+
+api("/api/colleagues").then((colleagues) => {
+  state.colleagues = colleagues;
+  const select = $("teamAuthor");
+  select.textContent = "";
+  for (const c of colleagues) {
+    const option = document.createElement("option");
+    option.value = c.id;
+    option.textContent = c.name + " — " + c.title;
+    select.appendChild(option);
+  }
+  // Remembered person if still in the directory, else the first entry.
+  const remembered = colleagues.some((c) => c.id === state.colleague) ? state.colleague : colleagues[0]?.id;
+  if (remembered) setColleague(remembered);
+  state.lastEscalationsJson = "";
+  renderTeamPane();
+}).catch(() => toast("Colleague directory unavailable — team chat disabled", "warn"));
 
 setInterval(refresh, 1000);
 refresh();

@@ -66,6 +66,7 @@ export function classifyMessage(message: MessageRecord): MemoryEventType {
   const type = (message.metadata as { type?: unknown } | null)?.type;
   if (type === "human_resolution") return "human_resolution";
   if (type === "ticket_closed") return "ticket_closed";
+  if (type === "internal_note") return "internal_note";
   return "system_note";
 }
 
