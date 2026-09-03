@@ -1,5 +1,5 @@
 /**
- * Tests for the end-of-ticket summarizer (src/memory/summarizer.ts):
+ * Tests for the end-of-ticket summarizer (src/memory/strategies/structured/summarizer.ts):
  * candidate selection (terminal, idle, verified-customer threads only),
  * exactly-one-episode idempotency across sweeps, episode decay, and the
  * self-learning loop distilling human-resolution notes into persistent
@@ -10,12 +10,12 @@ import { join } from "node:path";
 import { openDb } from "../src/db/client.ts";
 import { insertCustomerMessage, insertSystemMessage } from "../src/db/messages.ts";
 import { claimNextMessage, completeWithReply } from "../src/db/queue.ts";
-import { listActiveMemories } from "../src/memory/store.ts";
+import { listActiveMemories } from "../src/memory/strategies/structured/store.ts";
 import {
   createEchoThreadSummarizer,
   findSummarizableThreads,
   summarizeOnce,
-} from "../src/memory/summarizer.ts";
+} from "../src/memory/strategies/structured/summarizer.ts";
 
 async function withTempDb(fn: (db: ReturnType<typeof openDb>) => Promise<void> | void) {
   const dir = await Deno.makeTempDir({ prefix: "flywheel_summarizer_test_" });

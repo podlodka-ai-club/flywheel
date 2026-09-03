@@ -21,17 +21,18 @@ import {
   listUnacknowledgedFailed,
   markDelivered,
 } from "../../src/db/messages.ts";
-import {
-  archiveMemory,
-  eraseCustomerMemories,
-  listAllMemories,
-  listMemoryCustomers,
-} from "../../src/memory/store.ts";
+import { PROVIDER_KEY_ENVS } from "../../src/agent/harness.ts";
+import { createMemoryStrategy } from "../../src/memory/registry.ts";
 import { parseEnvFile } from "./env_file.ts";
 
 configureLogging({ name: "dev-ui" });
 const db = openDb(config.databasePath);
 const connectors = createConnectors();
+// The Memory view is the audit surface of whichever strategy the engine runs,
+// so MEMORY_STRATEGY must match across the two processes (like DATABASE_PATH).
+// No LLM setup here: the harness audits, archives, and erases but never
+// summarizes — and the audit stays available with MEMORY_ENABLED=0.
+const memory = createMemoryStrategy(config.memoryStrategy, { db, config }).audit;
 const INDEX_HTML_URL = new URL("./index.html", import.meta.url);
 
 function json(body: unknown, status = 200): Response {
@@ -370,15 +371,6 @@ const ENV_FILE_PATH = "./.env";
 // Anything credential-shaped is masked by NAME, so no fixed list can miss one.
 const SECRET_ENV_RE = /API_KEY|SECRET|TOKEN|PASSWORD/i;
 
-// Mirrors PROVIDER_KEY_ENVS in src/agent/harness.ts — not imported, because
-// pulling the pi SDK into this process would break dev:ui's strict --allow-env.
-const PROVIDER_KEY_ENVS: Record<string, string> = {
-  openrouter: "OPENROUTER_API_KEY",
-  google: "GEMINI_API_KEY",
-  openai: "OPENAI_API_KEY",
-  anthropic: "ANTHROPIC_API_KEY",
-};
-
 // Every config var with its default as a display string. Kept in sync with
 // loadConfig() in src/config.ts and the README env tables.
 const CONFIG_VARS: { env: string; default: string; section: string; note?: string }[] = [
@@ -387,12 +379,14 @@ const CONFIG_VARS: { env: string; default: string; section: string; note?: strin
   { env: "LLM_MODEL", default: "", section: "LLM & agent", note: "empty = the provider's default model" },
   { env: "LLM_THINKING", default: "off", section: "LLM & agent", note: "auto-clamped per model at runtime" },
   { env: "MEMORY_ENABLED", default: "1", section: "Memory" },
+  { env: "MEMORY_STRATEGY", default: "structured", section: "Memory", note: "registered implementation (src/memory/registry.ts); the engine's --memory=<name> flag overrides it" },
   { env: "SUMMARIZE_AFTER_MS", default: "86400000", section: "Memory", note: "idle time before a terminal thread summarizes" },
   { env: "SUMMARIZER_PROVIDER", default: "", section: "Memory", note: "empty = inherit the agent's" },
   { env: "SUMMARIZER_MODEL", default: "", section: "Memory", note: "empty = inherit the agent's" },
   { env: "MEMORY_HYDRATION_BUDGET", default: "1200", section: "Memory", note: "approx. tokens of memories in the system prompt" },
   { env: "MEMORY_RUN_WRITE_CAP", default: "3", section: "Memory", note: "max memory writes per agent run" },
   { env: "MEMORY_ACTIVE_CAP", default: "200", section: "Memory", note: "max active memories per customer" },
+  { env: "MEMORY_EVENT_POLL_MS", default: "1000", section: "Memory", note: "bus-tail cadence: how fast new rows reach the strategy's event handler" },
   { env: "DATABASE_PATH", default: "./data/support.db", section: "Queue & engine" },
   { env: "WORKER_CONCURRENCY", default: "2", section: "Queue & engine" },
   { env: "POLL_INTERVAL_MS", default: "500", section: "Queue & engine" },
@@ -579,17 +573,17 @@ async function handler(req: Request): Promise<Response> {
 
   // ---- Per-customer memory (spec §10): audit surface + erasure + simulation
   if (req.method === "GET" && pathname === "/api/memory/customers") {
-    return json(listMemoryCustomers(db));
+    return json(memory.listCustomers());
   }
   if (req.method === "GET" && pathname === "/api/memory") {
     const customerId = (url.searchParams.get("customer") ?? "").trim();
     if (customerId === "") return json({ error: "customer query param required" }, 400);
-    return json(listAllMemories(db, customerId));
+    return json(memory.listEntries(customerId));
   }
   if (req.method === "DELETE" && pathname === "/api/memory") {
     const customerId = (url.searchParams.get("customer") ?? "").trim();
     if (customerId === "") return json({ error: "customer query param required" }, 400);
-    const erased = eraseCustomerMemories(db, customerId);
+    const erased = memory.erase(customerId);
     logger.info("dev_ui_memories_erased", { customerId, erased });
     return json({ erased });
   }
@@ -598,7 +592,7 @@ async function handler(req: Request): Promise<Response> {
     const body = await req.json().catch(() => ({}));
     const customerId = typeof body.customerId === "string" ? body.customerId.trim() : "";
     if (customerId === "") return json({ error: "customerId required" }, 400);
-    const archived = archiveMemory(db, customerId, decodeURIComponent(memoryArchive[1]));
+    const archived = memory.archive(customerId, decodeURIComponent(memoryArchive[1]));
     if (archived) {
       logger.info("dev_ui_memory_archived", {
         customerId,
@@ -607,21 +601,27 @@ async function handler(req: Request): Promise<Response> {
     }
     return json({ archived });
   }
-  const humanResolution = pathname.match(/^\/api\/threads\/([^/]+)\/human_resolution$/);
-  if (req.method === "POST" && humanResolution) {
-    const threadId = decodeURIComponent(humanResolution[1]);
+  // Platform-inserted completed notes (spec §3.2 items 5–6), simulated from the thread
+  // header: a human resolution or the ticket being closed. status='completed'
+  // rows are unclaimable; the runtime classifies both, while the structured
+  // strategy reacts immediately to ticket_closed and reads resolution notes
+  // through the summarizer transcript.
+  const platformNote = pathname.match(/^\/api\/threads\/([^/]+)\/(human_resolution|ticket_closed)$/);
+  if (req.method === "POST" && platformNote) {
+    const threadId = decodeURIComponent(platformNote[1]);
+    const type = platformNote[2] as "human_resolution" | "ticket_closed";
     const body = await req.json().catch(() => ({}));
     const content = typeof body.content === "string" ? body.content.trim() : "";
-    if (content === "") return json({ error: "content required" }, 400);
+    if (content === "" && type === "human_resolution") return json({ error: "content required" }, 400);
     const customerId = getThreadMessages(db, threadId)
       .find((m) => m.customerId !== null)?.customerId ?? null;
     const row = insertSystemMessage(db, {
       threadId,
-      content,
+      content: content === "" ? "Ticket closed on the platform." : content,
       customerId,
-      metadata: { type: "human_resolution", channel: "dev-ui" },
+      metadata: { type, channel: "dev-ui" },
     });
-    logger.info("dev_ui_human_resolution_inserted", { threadId, messageId: row.id, customerId });
+    logger.info(`dev_ui_${type}_inserted`, { threadId, messageId: row.id, customerId });
     return json({ id: row.id });
   }
 

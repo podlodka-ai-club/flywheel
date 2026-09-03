@@ -88,3 +88,13 @@ WHERE archived_at IS NULL AND superseded_by IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_episode_once
 ON memories(source_thread_id)
 WHERE kind = 'episode';
+
+-- Memory event-tail cursors (spec §10.8): how far each memory strategy's
+-- event handler has read on the messages bus (a messages.rowid). One row per
+-- strategy, advanced by compare-and-swap; set last_sequence=0 while stopped
+-- to replay retained history (deleting a row restarts at the current tail).
+CREATE TABLE IF NOT EXISTS memory_cursors (
+    strategy TEXT PRIMARY KEY,           -- registry name (MEMORY_STRATEGY)
+    last_sequence INTEGER NOT NULL,      -- last messages.rowid delivered
+    updated_at INTEGER NOT NULL          -- Unix ms
+);

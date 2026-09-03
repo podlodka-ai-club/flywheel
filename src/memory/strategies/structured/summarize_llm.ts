@@ -10,9 +10,9 @@ import {
   type LlmSetup,
   nextSupportedThinkingLevel,
   REASONING_REQUIRED_ERROR,
-} from "../agent/harness.ts";
-import { logger } from "../logger/index.ts";
-import type { MessageRecord } from "../db/messages.ts";
+} from "../../../agent/harness.ts";
+import { logger } from "../../../logger/index.ts";
+import type { MessageRecord } from "../../../db/messages.ts";
 import type { ThreadSummarizeFn, ThreadSummary } from "./summarizer.ts";
 
 const SYSTEM_PROMPT =

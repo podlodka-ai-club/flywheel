@@ -1,10 +1,10 @@
 /**
- * Per-customer memory store (spec §10). Every query is keyed by customer_id —
+ * Per-customer memory store of the `structured` strategy (spec §10). Every query is keyed by customer_id —
  * isolation is enforced here, not left to callers. Provenance is mandatory
  * and always assigned by engine code, never by the model.
  */
 import type { DatabaseSync } from "node:sqlite";
-import { logger } from "../logger/index.ts";
+import { logger } from "../../../logger/index.ts";
 
 export type MemoryKind = "fact" | "episode" | "playbook";
 export type MemoryProvenance =

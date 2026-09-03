@@ -1,10 +1,11 @@
 /**
  * Shared per-run context and result helpers for the support tools (spec §6).
- * Each tool lives in its own file next to this one; index.ts assembles the set.
+ * Each core tool lives in its own file next to this one; index.ts assembles
+ * the set together with the active memory strategy's tools.
  */
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Connectors } from "../../connectors/types.ts";
-import type { MemoryAccess } from "../../memory/store.ts";
+import type { MemoryRun } from "../../memory/strategy.ts";
 
 export interface EscalationState {
   escalated: boolean;
@@ -24,8 +25,8 @@ export interface ToolRunContext {
   connectors: Connectors;
   /** Written by escalate_to_human; the harness copies it onto reply metadata. */
   escalation: EscalationState;
-  /** Present only for verified customers with memory enabled (spec §10). */
-  memory?: MemoryAccess;
+  /** The memory strategy's run handle — present only for verified customers with memory enabled (spec §10). */
+  memory?: MemoryRun;
 }
 
 export function textResult(text: string, details: unknown = {}): AgentToolResult<unknown> {

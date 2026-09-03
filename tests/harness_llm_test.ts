@@ -292,20 +292,37 @@ Deno.test("tool loop e2e: escalation flag lands on reply metadata; KB result rea
 Deno.test("memory e2e: hydrated memories reach the system prompt; save_memory persists via the agent loop", async () => {
   const { fauxToolCall } = await import("@earendil-works/pi-ai");
   const { openDb } = await import("../src/db/client.ts");
-  const { createMemoryAccess, listActiveMemories } = await import("../src/memory/store.ts");
+  const { createStructuredMemoryStrategy } = await import(
+    "../src/memory/strategies/structured/index.ts"
+  );
+  const { listActiveMemories, saveMemory } = await import(
+    "../src/memory/strategies/structured/store.ts"
+  );
   const { join } = await import("node:path");
 
   const dir = await Deno.makeTempDir({ prefix: "flywheel_memharness_test_" });
   const db = openDb(join(dir, "test.db"));
   try {
-    const seedAccess = createMemoryAccess(db, {
+    saveMemory(db, {
       customerId: "cust_7",
-      threadId: "tkt_seed",
-      hydrationBudgetTokens: 800,
-      runWriteCap: 3,
-      activeCap: 100,
+      kind: "fact",
+      content: "maintenance window is Sunday 02:00",
+      provenance: "customer_stated",
+      sourceThreadId: "tkt_seed",
     });
-    seedAccess.saveFact("maintenance window is Sunday 02:00");
+    // The run handle comes through the strategy seam, exactly as the worker opens it.
+    const memory = createStructuredMemoryStrategy({
+      db,
+      config: {
+        llmProvider: "openrouter",
+        summarizerProvider: "",
+        summarizerModel: "",
+        summarizeAfterMs: 60_000,
+        memoryHydrationBudget: 800,
+        memoryRunWriteCap: 3,
+        memoryActiveCap: 100,
+      },
+    });
 
     const faux = fauxProvider();
     const models = createModels();
@@ -328,19 +345,12 @@ Deno.test("memory e2e: hydrated memories reach the system prompt; save_memory pe
       models,
       model: faux.getModel(),
     });
-    const runAccess = createMemoryAccess(db, {
-      customerId: "cust_7",
-      threadId: "tkt_1",
-      hydrationBudgetTokens: 800,
-      runWriteCap: 3,
-      activeCap: 100,
-    });
     const reply = await harness.run({
       threadId: "tkt_1",
       customerId: "cust_7",
       message: record("m1", "customer", "we deploy through Terraform, please remember", 1000),
       history: [],
-      memory: runAccess,
+      memory: memory.openRun({ customerId: "cust_7", threadId: "tkt_1" }),
     });
 
     assertEquals(reply.content, "Noted — I'll keep that in mind.");

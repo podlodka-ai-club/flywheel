@@ -367,7 +367,8 @@
       <div id="threadHeader">
         <strong id="threadTitle">No thread selected</strong>
         <span class="hint" id="threadHint">Create a thread and send a message as the customer.</span>
-        <button type="button" id="threadResolution" class="thread-logs-btn" hidden title="Simulate the platform inserting a human resolution note (spec §3.2 item 4) — the summarizer distills it into a playbook memory">🤝 human resolution</button>
+        <button type="button" id="threadResolution" class="thread-logs-btn" hidden title="Simulate the platform inserting a human resolution note (spec §3.2 item 5) — the summarizer distills it into a playbook memory">🤝 human resolution</button>
+        <button type="button" id="threadClose" class="thread-logs-btn" hidden title="Simulate the platform closing this ticket (spec §3.2 item 6) — the memory strategy's event handler reacts right away (the structured strategy writes the episode without waiting for the idle sweep)">✅ close ticket</button>
         <button type="button" id="threadLogs" class="thread-logs-btn" hidden title="Open the Logs view filtered to this thread">🪵 logs for this thread</button>
       </div>
       <div id="messages"><div class="empty">Nothing here yet.</div></div>
@@ -694,6 +695,15 @@ function renderMessages() {
     role.className = "m-role";
     role.textContent = isHumanEscalationResponse(m) ? "human colleague" : m.role;
     head.appendChild(role);
+    if (m.role === "system" && m.metadata && m.metadata.type) {
+      // Platform note type (human_resolution, ticket_closed, …) — what the
+      // memory strategy's event handler keys on.
+      const kind = document.createElement("span");
+      kind.className = "chip completed";
+      kind.textContent = m.metadata.type;
+      kind.title = "metadata.type — platform-inserted note (spec §3.2)";
+      head.appendChild(kind);
+    }
     head.appendChild(chip(m.status));
     if (m.attemptCount > 1) {
       const att = document.createElement("span");
@@ -1630,6 +1640,26 @@ $("threadResolution").onclick = async () => {
   }
 };
 
+$("threadClose").onclick = async () => {
+  if (!state.active) return;
+  const content = prompt(
+    "Closing note for " + state.active + " (optional):",
+    "Ticket closed on the platform.",
+  );
+  if (content === null) return;
+  try {
+    await api("/api/threads/" + encodeURIComponent(state.active) + "/ticket_closed", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: content.trim() }),
+    });
+    toast("Ticket closed — the memory strategy's event handler will pick it up", "ok");
+    refresh();
+  } catch (err) {
+    toast("Failed: " + err.message, "warn");
+  }
+};
+
 $("threadLogs").onclick = () => {
   if (!state.active) return;
   $("logThread").value = state.active;
@@ -1716,6 +1746,7 @@ function clearActiveThread() {
   $("threadHint").textContent = "Create a thread and send a message as the customer.";
   $("threadLogs").hidden = true;
   $("threadResolution").hidden = true;
+  $("threadClose").hidden = true;
   renderMessages();
 }
 
@@ -1747,6 +1778,7 @@ function selectThread(id) {
   $("threadHint").textContent = "";
   $("threadLogs").hidden = false;
   $("threadResolution").hidden = false;
+  $("threadClose").hidden = false;
   renderThreads();
   renderMessages();
   refresh();

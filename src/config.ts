@@ -4,7 +4,9 @@
  * into the `config` singleton read at import time by every process. Adding a
  * variable here means adding it to the enumerated --allow-env lists of the
  * db:init / dev:ui tasks in deno.json, or those harnesses fail at import
- * with NotCapable.
+ * with NotCapable. A setting may additionally accept a command-line flag
+ * that overrides its env var for one process (`deno task <task> --flag=value`
+ * forwards the flag to the script) — currently `--memory=<strategy>`.
  */
 export interface Config {
   databasePath: string;
@@ -24,6 +26,13 @@ export interface Config {
   llmModel: string;
   llmThinking: ThinkingLevel;
   memoryEnabled: boolean;
+  /**
+   * Which memory implementation runs — a name from the registry in
+   * src/memory/registry.ts. `MEMORY_STRATEGY` in the environment (keep it
+   * identical for the engine and the dev harness, like DATABASE_PATH);
+   * `--memory=<name>` on the command line overrides it for that process.
+   */
+  memoryStrategy: string;
   /** Empty = inherit llmProvider / llmModel for summarization. */
   summarizerProvider: string;
   summarizerModel: string;
@@ -31,6 +40,8 @@ export interface Config {
   memoryHydrationBudget: number;
   memoryRunWriteCap: number;
   memoryActiveCap: number;
+  /** Cadence of the memory runtime's bus tail (event delivery latency + retry delay). */
+  memoryEventPollMs: number;
   /** Directory containing the Markdown knowledge base. */
   knowledgeBasePath: string;
   /** Development convenience: atomically reindex when wiki files change. */
@@ -79,7 +90,25 @@ function envAgentMode(name: string, fallback: Config["agentMode"]): Config["agen
   return raw;
 }
 
-export function loadConfig(): Config {
+/**
+ * `--name=value` or `--name value` from the command line. `deno task start
+ * --memory=x` forwards the flag to src/main.ts; entrypoints that never
+ * receive it fall through to the env var. A dangling `--name` (no value, or
+ * another flag next) counts as absent.
+ */
+function cliFlag(args: string[], name: string): string | undefined {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith(`--${name}=`)) return arg.slice(name.length + 3) || undefined;
+    if (arg === `--${name}`) {
+      const next = args[i + 1];
+      return next === undefined || next.startsWith("--") ? undefined : next;
+    }
+  }
+  return undefined;
+}
+
+export function loadConfig(cliArgs: string[] = Deno.args): Config {
   return {
     databasePath: envStr("DATABASE_PATH", "./data/support.db"),
     lockTimeoutMs: envInt("LOCK_TIMEOUT_MS", 600_000),
@@ -104,8 +133,11 @@ export function loadConfig(): Config {
     // Auto-clamped to what the model supports: reasoning-mandatory models
     // raise "off" to their minimum, non-reasoning models force "off".
     llmThinking: envThinkingLevel("LLM_THINKING", "off"),
-    // Per-customer memory (spec §10)
+    // Per-customer memory (spec §10). MEMORY_ENABLED is the master switch;
+    // the strategy name picks the implementation behind src/memory/strategy.ts
+    // (validated against the registry at startup) — the CLI flag wins.
     memoryEnabled: envBool("MEMORY_ENABLED", true),
+    memoryStrategy: cliFlag(cliArgs, "memory") ?? envStr("MEMORY_STRATEGY", "structured"),
     // Summarization is a cheap-model job — point it at a smaller model/provider
     // than the main agent when desired; empty inherits the agent's setting.
     summarizerProvider: envStr("SUMMARIZER_PROVIDER", ""),
@@ -114,6 +146,8 @@ export function loadConfig(): Config {
     memoryHydrationBudget: envInt("MEMORY_HYDRATION_BUDGET", 1200),
     memoryRunWriteCap: envInt("MEMORY_RUN_WRITE_CAP", 3),
     memoryActiveCap: envInt("MEMORY_ACTIVE_CAP", 200),
+    // How quickly a new row on the bus reaches the strategy's event handler.
+    memoryEventPollMs: envInt("MEMORY_EVENT_POLL_MS", 1000),
     knowledgeBasePath: envStr("KNOWLEDGE_BASE_PATH", "./wiki"),
     knowledgeBaseReload: envBool("KNOWLEDGE_BASE_RELOAD", false),
   };

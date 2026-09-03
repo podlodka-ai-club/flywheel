@@ -1,6 +1,6 @@
 # Implementation Milestones
 
-Milestones M1–M8 (plus the M3.5 logging, M5.5 wiki-search, and M5.6 durable-escalation addenda), each ending in something runnable that you verify by hand before we continue. **Execution order: M1 → M5, then M7 (memory), M5.5 (real wiki search), M5.6 (durable human escalation), M6 (hardening), and M8 (shared knowledge)** — M6 and M7 are deliberately swapped so the hardening pass covers memory and the complete human-in-the-loop lifecycle; the numbers stay stable as identifiers. Milestones 1–3 require **no LLM API key**: the engine runs with a deterministic echo agent so all queue mechanics can be exercised for free. The real agent arrives in Milestone 4.
+Milestones M1–M8 (plus the M3.5 logging, M5.5 wiki-search, M5.6 durable-escalation, and M7.5/M7.6 memory-seam addenda), each ending in something runnable that you verify by hand before we continue. **Execution order: M1 → M5, then M7 (memory) with its M7.5 seam and M7.6 trigger/schedule addenda, M5.5 (real wiki search), M5.6 (durable human escalation), M6 (hardening), and M8 (shared knowledge)** — M6 and M7 are deliberately swapped so the hardening pass covers memory, real retrieval, and the complete human-in-the-loop lifecycle; the numbers stay stable as identifiers. Milestones 1–3 require **no LLM API key**: the engine runs with a deterministic echo agent so all queue mechanics can be exercised for free. The real agent arrives in Milestone 4.
 
 Testing happens through a **dev web harness** (`tools/ui/`) that simulates the external support platform — ingest and dispatcher — which is out of scope for the core per [specification.md](specification.md) §3.2. It is a separate Deno process from the engine, sharing the SQLite file just like a real co-located adapter would, so every test session also exercises the multi-process WAL contract. No frontend framework, no build step: one `Deno.serve` server with a thin JSON API over the data-access layer, serving a single static HTML page (vanilla JS, ~1s polling).
 
@@ -207,7 +207,7 @@ Your testing loop: `deno task start` (engine) in one terminal, `deno task dev:ui
 3. The conversation shows an internal **human colleague** bubble followed by a **human-assisted** assistant reply, which is delivered normally; the composer unmutes.
 4. Double-submit or redeliver the human response: only one pending event and one assistant continuation exist.
 5. Restart the engine while the escalation is awaiting a human, then respond: the workflow continues because no in-memory wait state is required.
-6. Add a separate **🤝 human resolution** note after closure: it remains unclaimable and is still distilled into memory independently.
+6. Before the thread's first summary, add a separate **🤝 human resolution** note, then close the ticket or wait for the idle sweep: the note remains unclaimable and is distilled into a playbook. Notes added after an episode already exists require the M6 re-summarization work.
 
 **Automated tests:** message-contract scoping and one-shot dedup; claim allowlist; worker continuation through echo mode; faux-provider prompt provenance and continuation metadata; connector idempotency; invalid targets and lifecycle-state derivation; full regression suite.
 
@@ -219,10 +219,10 @@ Your testing loop: `deno task start` (engine) in one terminal, `deno task dev:ui
 
 **Build:**
 - `memories` table + indexes per spec §10.2 (`fact` / `episode` / `playbook`, provenance, supersede chain, soft-archive; additive migration)
-- `src/memory/store.ts`: scoped CRUD — every query keyed by `customer_id`; erasure operation (`hard-delete all memories for customer X`)
+- `src/memory/strategies/structured/store.ts`: scoped CRUD — every query keyed by `customer_id`; erasure operation (`hard-delete all memories for customer X`)
 - **Write path 1 — agent tools**: `save_memory(kind, content, supersedes?)` + `archive_memory(id)`, with provenance assigned by the harness (`customer_stated` for anything derived from customer text — the model cannot pick), per-run write cap (3) and per-customer active cap (200)
-- **Write path 2 — end-of-ticket summarizer** (`src/memory/summarizer.ts`, background job like the reaper): idle terminal threads → one `episode` memory each, idempotent via the unique index; `SUMMARIZE_AFTER_MS` (default 24h, short in dev)
-- **Write path 3 — human-resolution learning**: platform-inserted `human_resolution` system rows (spec §3.2 item 4) distilled into `playbook` memories — the self-learning loop that lowers escalation rates over time
+- **Write path 2 — end-of-ticket summarizer** (`src/memory/strategies/structured/summarizer.ts`, driven by the M7.6 runtime): idle terminal threads → one `episode` memory each, idempotent via the unique index; `SUMMARIZE_AFTER_MS` (default 24h, short in dev)
+- **Write path 3 — human-resolution learning**: platform-inserted `human_resolution` system rows (spec §3.2 item 5) distilled into `playbook` memories — the self-learning loop that lowers escalation rates over time
 - **Read path**: memory hydration into the system prompt — facts + playbooks first, then recent episodes; count/token budget (`MEMORY_HYDRATION_BUDGET`); every entry rendered with provenance + date, claims labeled as claims; system prompt instructs that memories are background data, never instructions, and unverified claims (entitlements, billing) are never acted on
 - Structured logs: `memory_saved`, `memory_archived`, `memory_hydrated` (count + tokens), `thread_summarized`
 - Harness UI: **Memory view** per customer (kind, provenance, date, content, archive button — the audit surface); a "simulate human resolution" action on escalated threads; memory events visible in the Logs view
@@ -240,9 +240,54 @@ Your testing loop: `deno task start` (engine) in one terminal, `deno task dev:ui
 
 ---
 
+## M7.5 — Memory strategy seam (added on request)
+
+**Goal:** make memory pluggable — several memory variants can exist side by side and the engine picks one per start with a CLI flag — without changing what the M7 implementation does. Design: spec §10.8.
+
+**Build:**
+- `src/memory/strategy.ts`: the seam — `MemoryStrategy` (`openRun`, `startJobs`, `audit`, `describe`) and the per-run handle `MemoryRun` (`hydrate`, `tools`, `toolGuidance`); the worker, the LLM harness, the tool assembler, and the dev harness depend only on it
+- `src/memory/registry.ts`: name → factory; unknown names fail fast at startup with the registered list
+- `src/memory/strategies/structured/`: the M7 implementation moved behind the seam with its behavior unchanged — store, summarizer (echo + LLM), the `save_memory` / `archive_memory` tools (moved out of `src/agent/tools/`), and a wrapper that owns the tools' prompt guidance, the summarizer's model resolution, and the audit surface
+- Selection: `MEMORY_STRATEGY` (default `structured`; in the strict env allowlists and the Config view) and the engine flag `deno task start --memory=<name>` (Deno forwards task arguments to the script); `MEMORY_ENABLED=0` stays the master switch
+- Prompt builder takes the strategy's tool-guidance text instead of hardcoding the memory tools; `engine_started` logs `memoryStrategy` plus the strategy's `describe()` settings (the summarizer/caps fields as before)
+- Dev harness Memory view served through the strategy's `audit` — the harness must run the same `MEMORY_STRATEGY` as the engine (it shares the DB file, so it shares the strategy)
+
+**You verify:**
+1. `deno task start` (llm or echo) → `engine_started` carries `memoryStrategy: "structured"` next to the familiar summarizer/caps fields; the M7 flows (in llm mode: `memory_hydrated` per run and facts via `save_memory`; in both modes: episodes/playbooks from the summarizer, Memory view archive/erase) behave exactly as before.
+2. `deno task start --memory=nope` → the engine exits immediately with `Unknown memory strategy "nope" — registered: structured …`; nothing is claimed.
+3. `MEMORY_ENABLED=0 deno task start` → `memoryStrategy: null`, no `memory_hydrated` events (llm mode), replies still flow; the harness Memory view still shows existing entries.
+4. Config view lists `MEMORY_STRATEGY` with default `structured`; the Memory view still lists your customers' entries (served through the strategy's audit surface now).
+
+**Automated tests:** CLI-flag over env-var selection (and dangling-flag handling); registry resolution and the unknown-name error; the structured strategy driven only through the seam (empty and populated hydration, id-free tools, audit fencing and erasure, job start/stop); the worker opening a run handle from a fake strategy for verified customers only; the LLM harness rendering a fake strategy's section and offering its tools to the model.
+
+---
+
+## M7.6 — Memory triggers & schedule (added on request)
+
+**Goal:** make every kind of memory system pluggable behind the M7.5 seam — ones that run on their own clock and ones that react to events (a ticket being closed, a new customer message, a committed reply) — with the engine owning all scheduling, so a strategy never writes a poller or a timer. Design: spec §10.8 (three ports), §3.2 item 6 (the `ticket_closed` note).
+
+**Build:**
+- Seam (`src/memory/strategy.ts`): `startJobs()` replaced by two declarative ports — `jobs: { name, intervalMs, run }[]` (schedule) and `events: { types, handle }` (event) — plus optional `close()`; `openRun` / `audit` / `describe` unchanged. Event types `customer_message`, `agent_reply`, `human_resolution`, `ticket_closed`, `system_note`; an event carries the row, its verified customer, its bus position, and a lazy snapshot of the thread as of that row
+- Memory runtime (`src/memory/runtime.ts`): runs each declared job as an abortable loop (`memory_job_failed` never kills it) and tails the `messages` table by rowid into the strategy's handler — in bus order, after commit, at-least-once, unverified rows dropped, three attempts then `memory_event_dropped`, `memory_event_handled` on success; per-strategy cursor in the new `memory_cursors` table (compare-and-swap; a first-seen strategy starts at the end of the bus; set `last_sequence=0` while stopped to replay retained history); started by the engine only, stopped on shutdown, then `close()`
+- Platform contract: spec §3.2 item 6 — an optional `role='system', status='completed'` row with `metadata.type='ticket_closed'`; harness "✅ close ticket" button next to "🤝 human resolution" (`POST /api/threads/:id/ticket_closed`); system rows in the chat view show their note type as a chip
+- `structured` strategy: the idle sweep becomes its declared `summarizer` job (loop plumbing removed from `summarizer.ts`); subscribes to `ticket_closed` + `agent_reply` and summarizes a closed ticket immediately when it is terminal (a reply in flight defers to that reply's `agent_reply` event); the unique episode index keeps triggers and sweep idempotent; `thread_summarized` logs its `trigger`
+- Config: `MEMORY_EVENT_POLL_MS` (default 1000; strict allowlists + Config view); `engine_started` logs `memoryJobs`, `memoryEvents`, `memoryEventPollMs`; the message DAL gains the bus-tail queries (`listMessagesAfter`, `latestMessageSequence`, `getThreadMessagesUpTo`)
+
+**You verify:**
+1. `AGENT_MODE=echo deno task start` → `engine_started` carries `memoryJobs: ["summarizer"]`, `memoryEvents: ["ticket_closed","agent_reply"]`, `memoryEventPollMs: 1000`; the harness Database view lists `memory_cursors` with one `structured` row.
+2. Send a ticket, get the reply, click "✅ close ticket" → within about a second the Logs view shows `memory_event_handled` (`type: "ticket_closed"`) followed by `thread_summarized` with `trigger: "ticket_closed"`; the episode is in the Memory tab immediately — no `SUMMARIZE_AFTER_MS` wait. Every reply also yields a `memory_event_handled` with `type: "agent_reply"` (that is where the strategy re-checks closed threads).
+3. Close a ticket while its reply is still being generated (echo mode with `DEV_FAULTS=1` and a `[[sleep:5000]]` message makes this easy) → no episode until the reply lands, then `thread_summarized` with `trigger: "agent_reply"`.
+4. Send another message in a closed thread → the reply flows as before and no second episode appears (one per thread until M6 re-summarization); the sweep never duplicates one either.
+5. Stop the engine, close a ticket while it is down, restart → the closure is delivered on restart (`memory_event_handled`, the cursor resumed) and the episode appears.
+6. `MEMORY_ENABLED=0 deno task start` → no `memory_*` runtime events at all, `memoryJobs: []`; the Memory view still works.
+
+**Automated tests:** the runtime (typed events in bus order, unverified rows dropped, unsubscribed types skipped, the thread snapshot as of the event; cursor persistence and resume, per-strategy cursors, nothing delivered twice; retry-then-drop on a failing handler; jobs on their interval surviving errors, `close()` on stop; a trigger-only fake strategy fed by the worker's fenced commit in echo mode; the structured strategy summarizing on `ticket_closed` through the runtime); the structured strategy's job/event declarations and its summarize-at-once, deferred-while-in-flight, and sweep-idempotent behavior through the seam.
+
+---
+
 ## M6 — Hardening & operations
 
-**Goal:** production posture — clean shutdown, locked-down permissions, maintenance, docs, and a full end-to-end suite. **Runs after M7 and M5.5**, so the hardening pass and E2E suite cover both the memory subsystem and real wiki retrieval.
+**Goal:** production posture — clean shutdown, locked-down permissions, maintenance, docs, and a full end-to-end suite. **Runs after M7/M7.5/M7.6, M5.5, and M5.6**, so the hardening pass and E2E suite cover memory, real wiki retrieval, and durable human hand-back.
 
 **Build:**
 - Graceful shutdown: on SIGINT/SIGTERM stop claiming, finish or release in-flight work, exit

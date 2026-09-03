@@ -41,7 +41,7 @@ export function hydrateThreadHistory(records: MessageRecord[]): AgentMessage[] {
     } else if (record.role === "assistant") {
       messages.push(fauxAssistantMessage(record.content, { timestamp: record.createdAt }));
     } else if (record.role === "system" && systemType(record) === "human_resolution") {
-      // Platform-inserted resolution note (spec §3.2 item 4): visible to the
+      // Platform-inserted resolution note (spec §3.2 item 5): visible to the
       // agent as internal context, clearly marked as not customer-authored.
       messages.push({
         role: "user",

@@ -3,8 +3,10 @@
  * verified identity — customer-scoped tools take NO id argument from the
  * model, so prompt-injected "look up account X" has nothing to grab.
  *
- * One file per tool; this module assembles the set for a run and wraps every
- * tool with tool_executed/tool_failed logging. Shared context lives in context.ts.
+ * One file per core tool; this module assembles the set for a run — the core
+ * tools plus whatever the active memory strategy contributes through its run
+ * handle (spec §10.8) — and wraps every tool with tool_executed/tool_failed
+ * logging. Shared context lives in context.ts.
  */
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { logger } from "../../logger/index.ts";
@@ -13,8 +15,6 @@ import { buildSearchKnowledgeBase } from "./search_knowledge_base.ts";
 import { buildLookupCustomerAccount } from "./lookup_customer_account.ts";
 import { buildLookupCustomerSetup } from "./lookup_customer_setup.ts";
 import { buildEscalateToHuman } from "./escalate_to_human.ts";
-import { buildSaveMemory } from "./save_memory.ts";
-import { buildArchiveMemory } from "./archive_memory.ts";
 
 export type { EscalationState, ToolRunContext } from "./context.ts";
 
@@ -59,14 +59,11 @@ export function buildSupportTools(context: ToolRunContext): AgentTool[] {
     buildLookupCustomerAccount(context),
     buildLookupCustomerSetup(context),
     buildEscalateToHuman(context),
+    // Memory tools come from the strategy's run handle, which the worker opens
+    // only for verified customers with memory enabled — no verified identity,
+    // no memory reads or writes (spec §10.1). The seam requires them to be
+    // id-free, like every other customer-scoped tool.
+    ...(context.memory?.tools() ?? []),
   ];
-
-  // Memory tools exist only for verified customers with memory enabled —
-  // no verified identity, no memory reads or writes (spec §10.1).
-  const memory = context.memory;
-  if (memory !== undefined) {
-    tools.push(buildSaveMemory(memory), buildArchiveMemory(memory));
-  }
-
   return tools.map((tool) => instrument(context, tool));
 }

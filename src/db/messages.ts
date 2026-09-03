@@ -3,8 +3,9 @@
  * and the integration contract with the external ticketing platform (spec
  * §3.2). Contains the MessageRecord row mapping plus the contract's
  * operations: deduplicated customer ingest, thread reads and the hydration
- * source, platform-inserted system rows, the dispatcher's delivery stamp,
- * the failure poll/ack, and the dev-harness thread listing and deletion.
+ * source, the bus tail the memory runtime consumes (rows by rowid), platform-
+ * inserted system rows, the dispatcher's delivery stamp, the failure
+ * poll/ack, and the dev-harness thread listing and deletion.
  * (Claiming/completion mechanics live in queue.ts.)
  */
 import type { DatabaseSync } from "node:sqlite";
@@ -145,7 +146,7 @@ export function getThreadMessages(db: DatabaseSync, threadId: string): MessageRe
 /**
  * Hydration source (spec §5.1): the completed conversational rows of a thread,
  * oldest first — including platform-inserted system rows (e.g. human
- * resolution notes, spec §3.2 item 4), which the hydrator renders as internal
+ * resolution notes, spec §3.2 item 5), which the hydrator renders as internal
  * context. The in-flight (processing) anchor message is NOT included — the
  * worker passes its content to the agent separately.
  */
@@ -157,6 +158,38 @@ export function getCompletedThreadHistory(db: DatabaseSync, threadId: string): M
   ).all(threadId).map(rowToRecord);
 }
 
+/** A row with its position on the bus (SQLite rowid) — the memory runtime's tail unit. */
+export interface SequencedMessage {
+  sequence: number;
+  message: MessageRecord;
+}
+
+/**
+ * Bus tail (spec §10.8): rows inserted after `sequence`, in insert order.
+ * rowid is the table's b-tree key, so this is a seek, not a scan — and with
+ * SQLite's single writer, insert order is commit order: a row shows up here
+ * only once the transaction that produced it committed.
+ */
+export function listMessagesAfter(db: DatabaseSync, sequence: number, limit: number): SequencedMessage[] {
+  // deno-lint-ignore no-explicit-any
+  return db.prepare(
+    "SELECT rowid AS sequence, * FROM messages WHERE rowid > ? ORDER BY rowid ASC LIMIT ?",
+  ).all(sequence, limit).map((row: any) => ({ sequence: Number(row.sequence), message: rowToRecord(row) }));
+}
+
+/** Highest position on the bus (0 for an empty table) — where a new tail starts. */
+export function latestMessageSequence(db: DatabaseSync): number {
+  const row = db.prepare("SELECT COALESCE(MAX(rowid), 0) AS sequence FROM messages").get() as { sequence: number };
+  return Number(row.sequence);
+}
+
+/** A thread as of a bus position: its rows that landed at or before `sequence`, oldest first. */
+export function getThreadMessagesUpTo(db: DatabaseSync, threadId: string, sequence: number): MessageRecord[] {
+  return db.prepare(
+    "SELECT * FROM messages WHERE thread_id = ? AND rowid <= ? ORDER BY created_at ASC, id ASC",
+  ).all(threadId, sequence).map(rowToRecord);
+}
+
 export interface InsertSystemMessageInput {
   threadId: string;
   content: string;
@@ -166,7 +199,7 @@ export interface InsertSystemMessageInput {
 }
 
 /**
- * Platform-inserted system row (spec §3.2 item 4): status='completed' keeps
+ * Platform-inserted completed system row (spec §3.2 items 5–6): status='completed' keeps
  * it unclaimable — the engine never replies to it, only learns from it.
  */
 export function insertSystemMessage(
